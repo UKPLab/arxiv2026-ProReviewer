@@ -1,0 +1,33 @@
+[project]
+name = "reviewer-r1"
+version = "0.1.0"
+description = "A memory-driven peer review agent for scientific papers"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24.0",
+    "anthropic>=0.40.0",
+    "pydantic>=2.0.0",
+    "requests==2.31.0",
+    "tiktoken>=0.5.0",
+    "openai>=2.14.0",
+    "toml>=0.10.2",
+    "google>=3.0.0",
+    "tenacity>=8.2.0",
+    "transformers>=4.30.0",
+    "litellm>=1.0.0",
+    "tqdm>=4.65.0",
+    "loguru>=0.7.3",
+    "pandas>=2.3.3",
+    "ipdb>=0.13.13",
+    "arxiv>=2.1.0",
+    "aiohttp>=3.9.0",
+    "python-dateutil>=2.8.0",
+    "openreview-py>=1.54.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["reviewer"]

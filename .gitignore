@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
+venv/
+.venv/
+env/
+
+# Config (actual secrets)
+config.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Outputs and data
+outputs/
+data/
+logs/
+wandb/
+results/
+datasets/
+*.log
+
+# Cache
+.cache/
+.arxiv2md_cache/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Lock
+uv.lock
