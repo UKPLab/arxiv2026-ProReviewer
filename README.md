@@ -16,7 +16,7 @@ An RL-trained peer review agent featuring **ReviewerR1**, an R1-style reasoning 
 ### Prerequisites
 
 - Python >= 3.10
-- CUDA-capable GPU (for RL training and local model inference)
+- [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
 
 ### Setup
 
@@ -33,18 +33,12 @@ cd rllm
 pip install -e .
 cd ..
 
-# Install ProReviewer
-pip install -e .
 
 # Configure API keys
 cp config.toml.example config.toml
 # Edit config.toml with your API keys and model paths
 ```
 
-**Note for vLLM on SLURM**: Use pre-built wheels to avoid compilation issues:
-```bash
-uv pip install vllm --only-binary=:all:
-```
 
 ### Configuration
 
