@@ -1,4 +1,4 @@
-"""Training script for Reviewer-R1 using rLLM AgentTrainer.
+"""Training script for ProReviewer using rLLM AgentTrainer.
 
 Example usage:
     # Prepare dataset first

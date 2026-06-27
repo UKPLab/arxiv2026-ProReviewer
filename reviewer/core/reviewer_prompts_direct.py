@@ -1,4 +1,4 @@
-"""Prompts for the ReviewerR1Direct Agent (minimal RL training prompt)."""
+"""Prompts for the ProReviewerDirect Agent (minimal RL training prompt)."""
 # Writing High-Quality Review Points
 
 # Each weakness and strength must be **actionable**, **grounded**, and **well-justified**:
@@ -9,7 +9,7 @@
 #   - Bad: "The paper does not discuss scalability."
 #   - Good: "The paper does not discuss scalability beyond the tested 7B parameter range (Section 4.2). Since the proposed attention modification changes memory complexity from O(n^2) to O(n), the practical gains at larger model sizes would differ significantly, making this analysis essential for assessing real-world applicability."
 
-# System prompt for ReviewerR1Direct - Minimal prompt for RL training
+# System prompt for ProReviewerDirect - Minimal prompt for RL training
 REVIEWER_DIRECT_SYSTEM_PROMPT = """# Task
 
 You are reviewing a scientific paper. Your objective is to produce an accurate, internally consistent, and evidence-based review with: summary, strengths, weaknesses, questions for authors, and an overall score (1-10).

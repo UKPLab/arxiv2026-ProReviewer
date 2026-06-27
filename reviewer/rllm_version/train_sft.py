@@ -1,4 +1,4 @@
-"""SFT training script for Reviewer-R1 using rLLM AgentSFTTrainer.
+"""SFT training script for ProReviewer using rLLM AgentSFTTrainer.
 
 Converts JSON traces from outputs/sft_traces to parquet, then runs SFT.
 

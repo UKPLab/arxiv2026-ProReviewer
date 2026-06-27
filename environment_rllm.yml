@@ -279,11 +279,10 @@ dependencies:
     - referencing==0.37.0
     - regex==2026.1.15
     - requests==2.31.0
-    - reviewer-r1==0.1.0
+    - proreviewer==0.1.0
     - rich==14.3.2
     - rich-toolkit==0.19.4
     - rignore==0.7.6
-    - rllm==0.2.1
     - rpds-py==0.30.0
     - rsa==4.9.1
     - ruamel.yaml==0.19.1
@@ -333,7 +332,6 @@ dependencies:
     - urllib3==2.6.3
     - uvicorn==0.40.0
     - uvloop==0.22.1
-    - verl==0.6.1
     - virtualenv==20.36.1
     - vllm==0.11.0
     - wandb==0.24.2

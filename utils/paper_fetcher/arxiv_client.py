@@ -63,7 +63,7 @@ class ArxivClient:
         self.last_request_time = 0.0
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Reviewer-R1-Paper-Fetcher/1.0"
+            "User-Agent": "ProReviewer-Paper-Fetcher/1.0"
         })
 
     def _rate_limit(self):

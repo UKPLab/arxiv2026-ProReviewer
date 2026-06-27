@@ -376,7 +376,7 @@ class ReviewOutline(BaseModel):
 
 
 class ReviewLog(BaseModel):
-    """Evidence-based review log for the ReviewerR1 agent.
+    """Evidence-based review log for the ProReviewer agent.
 
     Collects evidence (claims, questions, notes) during paper review
     to support the final verdict in review_outline.

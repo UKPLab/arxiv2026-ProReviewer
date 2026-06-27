@@ -1,6 +1,6 @@
-"""rLLM integration for Reviewer-R1.
+"""rLLM integration for ProReviewer.
 
-This module adapts the Reviewer-R1 paper review system to the rLLM framework
+This module adapts the ProReviewer paper review system to the rLLM framework
 by implementing ReviewAgent (BaseAgent) and ReviewEnv (BaseEnv).
 
 Example usage:

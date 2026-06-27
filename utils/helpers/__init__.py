@@ -1,4 +1,4 @@
-"""Helper utilities for the Reviewer-R1 system."""
+"""Helper utilities for the ProReviewer system."""
 
 from .llm import call_llm
 from .logger import define_log_level

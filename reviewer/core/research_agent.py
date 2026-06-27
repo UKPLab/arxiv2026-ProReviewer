@@ -469,14 +469,14 @@ Based on all the information above (sections visited, evidence, notes, hypothesi
 if __name__ == "__main__":
     """Simple test for the research subagent."""
     import sys
-    sys.path.insert(0, "/Users/haishuo/Reviewer-R1")
+    sys.path.insert(0, "/Users/haishuo/ProReviewer")
 
     import json
     from reviewer.core.environment import PaperEnvironment
     from reviewer.core.reviewer_memory import Claim
 
     # Load real paper from JSON
-    paper_path = "/Users/haishuo/Reviewer-R1/data/0Ag8FQ5Rr3.json"
+    paper_path = "/Users/haishuo/ProReviewer/data/0Ag8FQ5Rr3.json"
     with open(paper_path, "r") as f:
         data = json.load(f)
 

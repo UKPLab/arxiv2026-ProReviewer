@@ -1,4 +1,4 @@
-"""ReviewerR1 - Simplified review agent with evidence-based review log for SFT+RL training."""
+"""ProReviewer - Simplified review agent with evidence-based review log for SFT+RL training."""
 
 from typing import Optional, Dict, List, Union, Tuple
 import json
@@ -11,8 +11,8 @@ from utils.helpers.llm import call_llm
 from utils.helpers.token_tracker import token_tracker
 
 
-class ReviewerR1(BaseReviewAgent):
-    """ReviewerR1 agent optimized for SFT+RL training.
+class ProReviewer(BaseReviewAgent):
+    """ProReviewer agent optimized for SFT+RL training.
 
     This agent supports two modes controlled by `use_research_subagent`:
 
@@ -47,7 +47,7 @@ class ReviewerR1(BaseReviewAgent):
         conference_format: str = "ICLR",
         use_research_subagent: bool = True
     ):
-        """Initialize the ReviewerR1 agent.
+        """Initialize the ProReviewer agent.
 
         Args:
             model: Model identifier for the main policy
@@ -81,7 +81,7 @@ class ReviewerR1(BaseReviewAgent):
         return self._system_prompt
 
     def get_tools(self) -> List[dict]:
-        """Return empty list - ReviewerR1 uses JSON output format, not function calling."""
+        """Return empty list - ProReviewer uses JSON output format, not function calling."""
         return []
 
     def _decide_next_action(self, trajectory: List[dict]) -> Tuple[Dict, Dict]:

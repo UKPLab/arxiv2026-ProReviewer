@@ -1,5 +1,5 @@
 [project]
-name = "reviewer-r1"
+name = "proreviewer"
 version = "0.1.0"
 description = "A memory-driven peer review agent for scientific papers"
 requires-python = ">=3.10"

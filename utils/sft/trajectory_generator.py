@@ -1,5 +1,5 @@
 """
-Trajectory Generator - Uses GPT-4 to generate ReviewerR1 decision trajectories from gold reviews
+Trajectory Generator - Uses GPT-4 to generate ProReviewer decision trajectories from gold reviews
 
 This module generates realistic decision sequences that lead to a given final review.
 Uses iterative refinement to ensure trajectory outputs match the gold review.
@@ -18,11 +18,11 @@ from utils.sft.trajectory_validator import TrajectoryValidator
 
 
 # Prompt templates for GPT-4
-TRAJECTORY_GENERATION_PROMPT = """You are generating SFT training data for ReviewerR1, a paper review agent that uses explicit judgment.
+TRAJECTORY_GENERATION_PROMPT = """You are generating SFT training data for ProReviewer, a paper review agent that uses explicit judgment.
 
 Given a paper and its final gold-standard review, generate a realistic decision trajectory showing how the agent would systematically review the paper to arrive at this final review.
 
-## ReviewerR1 Decision Format
+## ProReviewer Decision Format
 
 Each decision has two parts:
 1. **memory_operations**: Internal reasoning (add/update claims, questions, assessments)
@@ -439,7 +439,7 @@ def _quick_validate(trajectory: List[Dict], parsed_review: Dict) -> List[str]:
 if __name__ == "__main__":
     print("Trajectory Generator Module")
     print("=" * 60)
-    print("\nThis module generates ReviewerR1 decision trajectories from gold reviews.")
+    print("\nThis module generates ProReviewer decision trajectories from gold reviews.")
     print("\nKey functions:")
     print("  - generate_trajectory(): Main generation function with refinement")
     print("  - _format_generation_prompt(): Format GPT-4 prompts")

@@ -1,12 +1,12 @@
 # ProReviewer: From Passive Generation to Investigation: A Proactive Scientific Peer Review Agent
 
-An RL-trained peer review agent featuring **ReviewerR1**, an R1-style reasoning agent with structured memory, research delegation, and evidence-based judgment. The system includes a multi-dimensional reward function, SFT data generation pipeline, and RL training infrastructure built on [rLLM](https://github.com/agentica-project/rllm).
+An RL-trained peer review agent featuring **ProReviewer**, an R1-style reasoning agent with structured memory, research delegation, and evidence-based judgment. The system includes a multi-dimensional reward function, SFT data generation pipeline, and RL training infrastructure built on [rLLM](https://github.com/agentica-project/rllm).
 
 ## Overview
 
 **ProReviewer** trains a language model to produce high-quality scientific peer reviews through reinforcement learning. The core components are:
 
-- **ReviewerR1 Agent**: R1-style reasoning agent with structured memory (claims, questions, assessments, review outline), research delegation via a verification subagent, and evidence-based judgment
+- **ProReviewer Agent**: R1-style reasoning agent with structured memory (claims, questions, assessments, review outline), research delegation via a verification subagent, and evidence-based judgment
 - **Multi-Dimensional Reward**: Reward function evaluating recall coverage, format compliance, actionability, grounding, factual correctness, duplicate detection, and memory-based reasoning quality
 - **RL Training Pipeline**: Multi-turn review environment integrated with the rLLM framework for GRPO-based training
 - **SFT Data Generation**: Tools for generating supervised fine-tuning trajectories as warm-start for RL
@@ -16,7 +16,7 @@ An RL-trained peer review agent featuring **ReviewerR1**, an R1-style reasoning 
 ### Prerequisites
 
 - Python >= 3.10
-- [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
+- CUDA-capable GPU (for RL training and local model inference)
 
 ### Setup
 
@@ -28,34 +28,23 @@ cd ProReviewer
 micromamba create -f environment_rllm.yml
 micromamba activate rllm
 
-# Install the modified rLLM framework (with step-level GRPO support)
-cd rllm
-pip install -e .
+# Install the verl backend
+git clone https://github.com/volcengine/verl.git
+cd verl
+git checkout v0.6.1
+uv pip install -e .
 cd ..
 
+# Install the modified rLLM framework (with step-level GRPO support)
+cd rllm
+uv pip install -e .
+cd ..
 
 # Configure API keys
 cp config.toml.example config.toml
 # Edit config.toml with your API keys and model paths
 ```
 
-
-### Configuration
-
-Edit `config.toml` to configure LLM models:
-
-```toml
-[qwen3-32b]
-model = "/path/to/qwen3-32b"
-temperature = 0.6
-top_p = 0.95
-
-[deepseek-reasoner]
-model = "deepseek/deepseek-reasoner"
-api_key = "your-api-key"
-```
-
-API keys can also be set via environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
 
 ## Project Structure
 
@@ -65,8 +54,8 @@ ProReviewer/
 ├── pyproject.toml                     # Python dependencies
 │
 ├── reviewer/                          # Core review system
-│   ├── core/                          # ReviewerR1 agent
-│   │   ├── reviewer_r1.py             # Main R1 agent
+│   ├── core/                          # ProReviewer agent
+│   │   ├── proreviewer.py             # Main R1 agent
 │   │   ├── reviewer_memory.py         # Memory structures (Claim, Assessment, etc.)
 │   │   ├── reviewer_prompts.py        # System prompts
 │   │   ├── research_agent.py          # Research subagent for verification
@@ -116,7 +105,7 @@ ProReviewer/
 
 ## Core Components
 
-### ReviewerR1 Agent (`reviewer/core/`)
+### ProReviewer Agent (`reviewer/core/`)
 
 The main agent uses R1-style reasoning with structured memory:
 

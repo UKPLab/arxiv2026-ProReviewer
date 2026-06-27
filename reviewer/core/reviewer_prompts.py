@@ -1,6 +1,6 @@
-"""Prompts and tool definitions for the ReviewerR1 Agent."""
+"""Prompts and tool definitions for the ProReviewer Agent."""
 
-# System prompt for ReviewerR1 - Main Agent with Research Subagent
+# System prompt for ProReviewer - Main Agent with Research Subagent
 REVIEWER_SYSTEM_PROMPT = """# Role & Objective
 
 You are the **Main Review Agent** orchestrating a scientific peer review process. You have access to a **Research Subagent** for depth-first investigations.
@@ -397,7 +397,7 @@ You must follow these rules exactly. Your review log will be provided before eac
 
 
 
-# NOTE: ReviewerR1 uses JSON output format, not function calling
+# NOTE: ProReviewer uses JSON output format, not function calling
 # The LLM outputs structured JSON with memory_operations and action
 # See REVIEWER_SYSTEM_PROMPT for the complete format specification
 

@@ -4,8 +4,8 @@ __version__ = "0.1.0"
 
 # Core components (active)
 from .core.base_agent import BaseReviewAgent
-from .core.reviewer_r1 import ReviewerR1
-from .core import ReviewerR1Direct  # Backward compatibility alias
+from .core.proreviewer import ProReviewer
+from .core import ProReviewerDirect  # Backward compatibility alias
 from .core.environment import PaperEnvironment, Section
 from .core.reviewer_memory import ReviewLog, ReviewMemory, Claim, Question as CoreQuestion, Note, ReviewOutline
 from .core.research_agent import ResearchSubagent
@@ -21,7 +21,7 @@ from .rllm_version import ReviewAgent as RLLMReviewAgent, ReviewEnv
 
 __all__ = [
     # Core (active)
-    "BaseReviewAgent", "ReviewerR1", "ReviewerR1Direct", "PaperEnvironment", "Section",
+    "BaseReviewAgent", "ProReviewer", "ProReviewerDirect", "PaperEnvironment", "Section",
     "ReviewLog", "ReviewMemory", "Claim", "CoreQuestion", "Note", "ReviewOutline",
     "ResearchSubagent",
     # Reward

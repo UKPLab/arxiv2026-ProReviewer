@@ -15,7 +15,7 @@ from collections import defaultdict
 
 
 class TrajectorySimulator:
-    """Simulates ReviewerR1 decision execution to build memory state."""
+    """Simulates ProReviewer decision execution to build memory state."""
 
     def __init__(self):
         """Initialize empty memory state."""

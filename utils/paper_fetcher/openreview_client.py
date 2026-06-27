@@ -41,7 +41,7 @@ class OpenReviewClient:
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("https://", adapter)
         self.session.headers.update({
-            "User-Agent": "Reviewer-R1-Paper-Fetcher/1.0"
+            "User-Agent": "ProReviewer-Paper-Fetcher/1.0"
         })
 
     def get_paper_pdf(self, paper_id: str) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
