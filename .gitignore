@@ -37,5 +37,10 @@ datasets/
 .DS_Store
 Thumbs.db
 
+# Research (excluded from remote)
+reviewer/core/research_agent.py
+reviewer/core/research_baseline.py
+reviewer/core/research_prompts.py
+
 # Lock
 uv.lock
