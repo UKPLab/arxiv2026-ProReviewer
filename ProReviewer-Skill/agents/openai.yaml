@@ -1,0 +1,12 @@
+# Codex CLI agent configuration for ProReviewer
+# See: https://github.com/openai/codex
+
+name: proreviewer
+description: >
+  Review scientific papers using the ProReviewer evidence-based review method.
+  Produces structured reviews grounded in specific paper evidence.
+
+instructions: |
+  Use the ProReviewer skill in proreviewer/SKILL.md.
+  The review CLI is at proreviewer/review_cli.py.
+  Run `python proreviewer/review_cli.py init <paper>` to start a review.

@@ -58,33 +58,33 @@ ProReviewer/
 │   │   ├── proreviewer.py             # Main R1 agent
 │   │   ├── reviewer_memory.py         # Memory structures (Claim, Assessment, etc.)
 │   │   ├── reviewer_prompts.py        # System prompts
-│   │   ├── research_agent.py          # Research subagent for verification
-│   │   ├── research_prompts.py        # Research subagent prompts
 │   │   ├── verifier.py                # Claim verification
 │   │   ├── base_agent.py              # Abstract base class
-│   │   └── environment.py             # Paper parsing and navigation
+│   │   ├── environment.py             # Paper parsing and navigation
+│   │   ├── review_agent.py            # RL review agent
+│   │   ├── review_env.py              # Review environment for RL
+│   │   └── review_workflow.py         # Multi-turn review workflow
 │   ├── reward/                        # Multi-dimensional reward system
 │   │   ├── calculator.py              # Reward computation
 │   │   ├── components.py              # Individual reward components
 │   │   ├── score_review.py            # Review scoring
-│   │   ├── prompts.py                 # Judge prompts
 │   │   ├── duplicate_checker.py       # Duplicate weakness detection
 │   │   ├── factual_correctness_simple.py  # Factual correctness
 │   │   ├── memory_reasoning.py        # Memory-based reasoning reward
 │   │   └── trajectory_memory_reasoning*.py  # Trajectory-level rewards
-│   └── rllm_version/                  # RL training pipeline
-│       ├── train.py                   # Training entry point
-│       ├── review_env.py              # Review environment for RL
-│       ├── review_workflow.py         # Multi-turn review workflow
-│       ├── review_agent.py            # RL review agent
-│       ├── rollout.py                 # Rollout logic
-│       ├── trace_generator.py         # Trace generation
-│       ├── prepare_review_dataset.py  # Dataset preparation
+│   ├── prompts/                       # Prompt templates
+│   │   ├── reward_prompts.py          # Reward judge prompts
+│   │   ├── rubric_dimensions.py       # Rubric evaluation dimensions
+│   │   └── trajectory_v2_prompt*.py   # Trajectory generation prompts
+│   └── sft/                           # SFT data generation
+│       ├── train.py                   # SFT training entry point
+│       ├── train_sft.py               # SFT training script
 │       ├── generate_review_sft_data.py # SFT data generation
-│       └── train_sft.py              # SFT training
+│       ├── prepare_review_dataset.py  # Dataset preparation
+│       └── trace_generator.py         # Trace generation
 │
-├── rllm/                              # RL framework
-│   └── ...                            # Training infrastructure (rLLM)
+├── rllm/                              # RL framework (modified rLLM)
+│   └── ...                            # Training infrastructure
 │
 └── utils/                             # Shared utilities
     ├── helpers/
@@ -128,29 +128,17 @@ Multi-dimensional reward function for RL training:
 | Duplicate Detection | Penalizes repeated weaknesses |
 | Memory Reasoning | Quality of reasoning based on memory state |
 
-### RL Training (`reviewer/rllm_version/`)
+### RL Training (`reviewer/core/` + `rllm/`)
 
 The training pipeline integrates with rLLM for GRPO-based reinforcement learning:
 
 - `review_env.py`: Multi-turn environment where the agent reads and reviews a paper
 - `review_workflow.py`: Orchestrates the review process across turns
-- `train.py`: Training entry point with rLLM integration
+- `review_agent.py`: RL review agent
 
-### Step-Level GRPO (`rllm/` modifications)
+We extend the rLLM framework with a **step-level GRPO** mode for step-wise advantage computation. Instead of computing advantages per trajectory, this mode pools all steps across trajectories of the same task and computes advantages at the step level. See [`rllm/change.md`](rllm/change.md) for details.
 
-We extend the rLLM framework with a **step-level GRPO** mode for step-wise advantage computation. Instead of computing advantages per trajectory, this mode pools all steps across trajectories of the same task and computes advantages at the step level. Key changes to rLLM:
-
-| File | Change |
-|------|--------|
-| `rllm/experimental/common/advantage.py` | New `step_level` advantage mode implementation |
-| `rllm/experimental/common/config.py` | Extended `stepwise_advantage_mode` to include `step_level` |
-| `rllm/experimental/verl/verl_advantage.py` | Step grouping by `task_id` instead of `trajectory_id` |
-| `rllm/trainer/verl/agent_workflow_trainer.py` | Step-level GRPO support in training loop |
-| `rllm/utils/episode_logger.py` | Logging for `reward_details` and `log_snapshot` |
-
-See [`rllm/change.md`](rllm/change.md) for details.
-
-### SFT Data Generation (`utils/sft/`)
+### SFT Data Generation (`reviewer/sft/` + `utils/sft/`)
 
 Tools for generating supervised fine-tuning trajectories:
 
