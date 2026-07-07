@@ -8,7 +8,7 @@ from datetime import datetime
 from rllm.engine.agent_execution_engine import AgentExecutionEngine
 from reviewer.rllm_version.review_env import ReviewEnv
 from reviewer.rllm_version.review_agent import ReviewAgent
-from reviewer.core.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
+from reviewer.prompts.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
 from transformers import AutoTokenizer
 import tiktoken
 

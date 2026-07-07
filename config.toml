@@ -1,0 +1,243 @@
+[qwen3-32b]
+model = "Qwen/Qwen3-32B"
+api_key = "EMPTY"
+base_url = "http://localhost:8014/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 4096
+
+[qwen3-8b]
+model = "Qwen/Qwen3-8B"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+
+[qwen3-14b]
+model = "Qwen/Qwen3-14B"
+api_key = "EMPTY"
+base_url = "http://localhost:8014/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 4096
+
+[step28]
+model = "/pfss/mlde/workspaces/mlde_wsp_Reviewer_R1/Reviewer-R1/outputs/8b-grpo-reviewer/checkpoints/curriculum_stage2_evidence_memory_depth_grounding_12_w2_no_gain/global_step_28_merged"
+api_key = "EMPTY"
+base_url = "http://localhost:8003/v1"
+
+[qwen3-embedding-8b]
+model = "Qwen/Qwen3-Embedding-8B"
+base_url="http://localhost:8003/v1"
+
+[agentreview-8b]
+model = "Qwen/Qwen3-8B"
+api_key = "EMPTY"
+base_url = "http://localhost:8003/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 2048
+
+[llama-8b]
+model = "meta-llama/Llama-3.1-8B-Instruct"
+api_key = "EMPTY"
+base_url = "http://localhost:8014/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 4096
+
+[llama-70b]
+model = "meta-llama/Llama-3.3-70B-Instruct"
+api_key = "EMPTY"
+base_url = "http://localhost:8014/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 4096
+
+[qwen35-122b]
+model = "Qwen/Qwen3.5-122B-A10B-FP8"
+api_key = "EMPTY"
+base_url = "http://localhost:8002/v1"
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+max_tokens = 16384
+enable_thinking = false
+
+[qwen35-397B]
+model = "Qwen/Qwen3.5-397B-A17B-FP8"
+api_key = "EMPTY"
+base_url = "http://localhost:8002/v1"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 0.0
+repetition_penalty = 1.0
+max_tokens = 32768
+
+[qwen35-397B-nothink]
+model = "Qwen/Qwen3.5-397B-A17B-FP8"
+api_key = "EMPTY"
+base_url = "http://localhost:8014/v1"
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+presence_penalty = 1.5
+repetition_penalty = 1.0
+max_tokens = 4096
+enable_thinking = false
+
+[qwen35-397B-gen]
+model = "Qwen/Qwen3.5-397B-A17B-FP8"
+api_key = "EMPTY"
+base_url = "http://localhost:8012/v1"
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+max_tokens = 32768
+enable_thinking = false
+
+[gemini-2-5-pro]
+model = "gemini/gemini-2.5-pro"
+api_key = "AIzaSyDbPEpOP2Mtf8s_-c-EFNfvr10q2dzkIW8"
+
+[gemini-3-1-pro]
+model = "gemini/gemini-3.1-pro-preview"
+api_key="AIzaSyDbPEpOP2Mtf8s_-c-EFNfvr10q2dzkIW8"
+
+[gemini-3-1-flashlite]
+model = "gemini/gemini-3.1-flash-lite"
+api_key = "AIzaSyDbPEpOP2Mtf8s_-c-EFNfvr10q2dzkIW8"
+
+[gpt-5-4]
+model = "openai/gpt-5.4-nano"
+api_key = "YOUR_OPENAI_API_KEY"
+prompt_cache_retention = "24h"
+
+
+
+[gpt-5mini]
+model = "openai/gpt-5-mini"
+api_key = "YOUR_OPENAI_API_KEY"
+
+[gpt-5-5]
+model = "gpt-5.5-2026-04-23"
+api_key = "YOUR_OPENAI_API_KEY"
+
+[gpt-5]
+model = "gpt-5"
+api_key = "YOUR_OPENAI_API_KEY"
+
+[cyclereviewer-sft]
+model = "/pfss/mlde/workspaces/mlde_wsp_Reviewer_R1/Reviewer-R1/outputs/sft_checkpoints/cyclereviewer-sft-qwen3-v1/global_step_336_merged"
+base_url = "http://localhost:8003/v1"
+api_key = "EMPTY"
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 4096
+
+[scirm-7b]
+model = "Haixx/scirm"
+base_url = "http://localhost:8004/v1"
+api_key = "EMPTY"
+temperature = 1
+top_p = 0.95
+max_tokens = 4096
+
+[gemma-4-31B]
+model = "google/gemma-4-31B-it"
+base_url = "http://localhost:8012/v1"
+api_key = "EMPTY"
+temperature = 1
+top_p = 0.95
+top_k=64
+max_tokens = 4096
+enable_thinking=false
+
+[deepseek-v4]
+api_key = "YOUR_DEEPSEEK_API_KEY"
+model="deepseek/deepseek-v4-flash"
+thinking="disabled"
+
+[oss-120b]
+model = "openai/openai/gpt-oss-120b"
+base_url = "http://localhost:8002/v1"
+api_key = "EMPTY"
+temperature = 1
+top_p = 1.0
+max_tokens = 8192
+include_reasoning=false
+
+[oss-20b]
+model = "openai/openai/gpt-oss-20b"
+base_url = "http://localhost:8013/v1"
+api_key = "EMPTY"
+temperature = 1
+top_p = 1.0
+max_tokens = 8192
+include_reasoning=false
+
+
+[revutil]
+model = "openai/meta-llama/Llama-3.1-8B-Instruct"
+base_url = "http://localhost:8000/v1"
+api_key = "EMPTY"
+lora_module = "review_lora"
+temperature = 0.0
+max_tokens = 4096
+
+[utility-score-rationale]
+model = "openai/meta-llama/Llama-3.1-8B-Instruct"
+base_url = "http://localhost:8011/v1"
+api_key = "EMPTY"
+lora_module = "review_lora"
+temperature = 0.0
+max_tokens = 4096
+
+# ============================================================================
+# Reward Calculation Configuration
+# ============================================================================
+
+[reward]
+# LLM model for judge evaluations
+judge_model = "openai/gpt-5-mini"
+api_key = "YOUR_OPENAI_API_KEY"
+
+# Enable caching of LLM responses to reduce redundant calls
+use_cache = true
+cache_dir = ".reward_cache"
+
+# Batch processing settings
+batch_size = 10
+max_concurrent_calls = 5
+
+[reward.weights]
+# Component weights (must sum to 1.0)
+recall = 1.0              # Coverage of human review points
+format = 1.0              # Format compliance
+actionable = 1.0         # Actionability of feedback
+grounded = 1.0           # Evidence grounding
+score_difference = 1.0    # Alignment with human ratings
+
+[reward.thresholds]
+# Minimum thresholds for filtering
+min_sft_reward = 0.6       # Minimum total reward to save SFT trajectory
+min_format_score = 0.8     # Minimum format compliance score

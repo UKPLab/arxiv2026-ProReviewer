@@ -1,331 +1,447 @@
-"""ProReviewer - Simplified review agent with evidence-based review log for SFT+RL training."""
+"""ReviewAgent - rLLM BaseAgent implementation for paper review.
 
-from typing import Optional, Dict, List, Union, Tuple
+This module implements the agent side of the agent-environment interaction
+following the rLLM/MathAgent pattern.
+"""
+
+from typing import Any, Dict, List, Optional, Tuple
+import copy
 import json
+import re
+import logging
 from pydantic import ValidationError
-from .base_agent import BaseReviewAgent
-from .environment import PaperEnvironment
+
 from .reviewer_memory import ReviewLog
-from litellm.types.utils import Message
-from utils.helpers.llm import call_llm
-from utils.helpers.token_tracker import token_tracker
+from reviewer.prompts.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
+from rllm.agents.agent import Action, BaseAgent, Step, Trajectory
 
+class ProReviewer(BaseAgent):
+    """Review agent extending rLLM's BaseAgent pattern.
 
-class ProReviewer(BaseReviewAgent):
-    """ProReviewer agent optimized for SFT+RL training.
+    The ReviewAgent:
+    1. Maintains the ReviewLog as internal state
+    2. Builds chat completions for LLM inference
+    3. Parses LLM responses into actions
+    4. Executes memory operations locally
+    5. Tracks trajectory for RL training
 
-    This agent supports two modes controlled by `use_research_subagent`:
-
-    **Mode 1: With Research Subagent (use_research_subagent=True, default)**
-    - Hierarchical architecture: Main agent orchestrates, research subagent investigates
-    - Actions: read_section, research, finish
-    - Research subagent has full autonomy with its own agent loop
-    - Separation of concerns: orchestration vs. deep research
-
-    **Mode 2: Direct Investigation (use_research_subagent=False)**
-    - Single-agent architecture: Agent performs all investigations directly
-    - Actions: read_section, search_paper, finish
-    - Better RL credit assignment (every action visible in trajectory)
-    - Lower token cost (no subagent LLM calls)
-
-    The agent maintains an evidence-based review log with:
-    - Claims: Extracted statements (verified by research subagent or directly)
-    - Questions: Unclear points and suspicions (answered by research subagent or directly)
-    - Notes: Reviewer's thoughts triggered during reading
-    - Review Outline: Final verdict (summary, strengths, weaknesses, questions, overall_score)
-
-    Key characteristics:
-    - Configurable architecture via use_research_subagent parameter
-    - Minimal state management for main agent
-    - Optimized for reinforcement learning with clear credit assignment
+    Key design decisions:
+    - accumulate_log_context: If True, includes log context in every message
+    - Memory operations are executed by the agent (local state update)
+    - External actions (read_section, research, finish) are passed to environment
     """
 
     def __init__(
         self,
-        model: str,
-        research_model: Optional[str] = None,
-        conference_format: str = "ICLR",
-        use_research_subagent: bool = True
+        accumulate_log_context: bool = True,
+        max_claims_in_context: int = 10,
+        system_prompt: Optional[str] = None,
+        memory_in_first_message: bool = False,
     ):
-        """Initialize the ProReviewer agent.
+        """Initialize the review agent.
 
         Args:
-            model: Model identifier for the main policy
-            research_model: Optional model for the research subagent (defaults to same as model)
-            conference_format: Conference format for the review
-            use_research_subagent: If True, uses hierarchical architecture with ResearchSubagent.
-                                  If False, uses single-agent architecture with direct investigation.
+            accumulate_log_context: Whether to include log context in messages
+            max_claims_in_context: Maximum claims to show in log context
+            system_prompt: Custom system prompt (defaults to REVIEWER_DIRECT_SYSTEM_PROMPT)
+            memory_in_first_message: If True, place memory/log state in the first
+                user message (after paper info) instead of in each observation.
+                This separates "what you know" from "what just happened".
         """
-        # Initialize base class (writer_subagent created but not used)
-        super().__init__(model, conference_format)
+        self.accumulate_log_context = accumulate_log_context
+        self.max_claims_in_context = max_claims_in_context
+        self._system_prompt = system_prompt or REVIEWER_DIRECT_SYSTEM_PROMPT
+        self.memory_in_first_message = memory_in_first_message
+        self.logger = logging.getLogger(self.__class__.__name__)
 
-        self.use_research_subagent = use_research_subagent
-
-        # Choose system prompt and initialize subagent based on mode
-        if use_research_subagent:
-            from .reviewer_prompts import REVIEWER_SYSTEM_PROMPT
-            from .research_agent import ResearchSubagent
-            self._system_prompt = REVIEWER_SYSTEM_PROMPT
-            self.research_model = research_model or model
-            self.research_subagent = ResearchSubagent(self.research_model)
-        else:
-            from .reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
-            self._system_prompt = REVIEWER_DIRECT_SYSTEM_PROMPT
-            self.research_model = None
-            self.research_subagent = None
-
+        # Internal state
         self.log = ReviewLog()
+        self._trajectory = Trajectory()
+        self._messages: List[Dict[str, str]] = []  # sliding window for LLM inference
+        # Track last response for trajectory
+        self._last_llm_response: Optional[str] = None
+        self._last_action: Optional[Dict] = None
+        self._last_memory_results: List[str] = []
 
-    def get_system_prompt(self) -> str:
-        """Return the system prompt for reviewer agent."""
-        return self._system_prompt
-
-    def get_tools(self) -> List[dict]:
-        """Return empty list - ProReviewer uses JSON output format, not function calling."""
-        return []
-
-    def _decide_next_action(self, trajectory: List[dict]) -> Tuple[Dict, Dict]:
-        """Override base method to use JSON output format instead of function calling.
+    def reset(self, paper_id: str = "") -> None:
+        """Reset agent state for a new episode.
 
         Args:
-            trajectory: Current conversation trajectory
+            paper_id: Identifier for the paper being reviewed
+        """
+        self.log = ReviewLog()
+        self._trajectory = Trajectory()
+        self._messages = [{"role": "system", "content": self._system_prompt}]
+        self._last_llm_response = None
+        self._last_action = None
+        self._last_memory_results = []
+        self._paper_intro = ""  # cached for memory_in_first_message mode
+
+    def update_from_env(
+        self,
+        observation: Dict[str, Any],
+        reward: float,
+        done: bool,
+        info: Dict[str, Any],
+    ) -> None:
+        """Update agent state from environment step result.
+
+        Called after environment.step() returns. Updates:
+        1. Messages with observation
+        2. Trajectory with complete step
+        3. Log state if first observation
+
+        Args:
+            observation: Dict with observation data
+                - First call: {"title": str, "sections": List[str]}
+                - Subsequent: {"action_result": str, ...}
+            reward: Reward from environment (0 for intermediate, terminal at finish)
+            done: Whether episode is complete
+            info: Additional info from environment
+        """
+        # First observation - initialize messages with system prompt and paper info
+        if not self._trajectory.steps and "title" in observation:
+            title = observation["title"]
+            sections = observation.get("sections", [])
+
+            self._paper_intro = f"The paper you are reviewing is titled '{title}' and it has the following sections: {', '.join(sections)}."
+            obs_content = self._paper_intro
+
+            # Show turn budget from the very first turn
+            max_turns = info.get("max_turns")
+            current_turn = info.get("current_turn")
+            if max_turns is not None and current_turn is not None:
+                obs_content += f"\n\n[Turn {current_turn}/{max_turns}]"
+
+            self._messages.append({"role": "user", "content": obs_content})
+
+        else:
+            # Build observation content for subsequent calls
+            if self.memory_in_first_message:
+                # In this mode, memory lives in msg[1]. The observation only
+                # carries the result of the previous action. Frame the sliding
+                # window so the model knows the assistant message above is its
+                # own last response.
+                obs_content = (
+                    "The message above is your previous response. "
+                    "Below is the environment's feedback from your last action.\n\n"
+                )
+            else:
+                obs_content = "The observation for this step is:\n"
+
+            # Add memory operation results if any
+            if self._last_memory_results:
+                obs_content += "<memory_operations_results>\n" + "\n".join(self._last_memory_results) + "\n</memory_operations_results>\n\n"
+
+            # Add action result
+            action_result = observation.get("action_result", "")
+            if action_result:
+                obs_content += f"<action_result>\n{action_result}\n</action_result>\n"
+
+            # Include log context in observation (legacy mode)
+            if self.accumulate_log_context and not self.memory_in_first_message:
+                log_context = self.log.build_context(detailed=True)
+                obs_content += f"\n<current_log_state>\n{log_context}\n</current_log_state>\n"
+
+            # Show turn counter
+            max_turns = info.get("max_turns")
+            current_turn = info.get("current_turn")
+            if max_turns is not None and current_turn is not None:
+                obs_content += f"\n[Turn {current_turn}/{max_turns}]\n"
+
+            # Sliding window for LLM inference (keeps context small)
+            self._messages = self._messages[:2] + [{"role": "assistant", "content": self._last_llm_response}, {"role": "user", "content": obs_content}]
+
+            # Place memory/log state in the first user message instead of observation
+            if self.accumulate_log_context and self.memory_in_first_message:
+                first_msg = self._paper_intro
+                log_context = self.log.build_context(detailed=True)
+                first_msg += f"\n\nYour current review log is:\n<current_log_state>\n{log_context}\n</current_log_state>"
+                if max_turns is not None and current_turn is not None:
+                    first_msg += f"\n\n[Turn {current_turn}/{max_turns}]"
+                self._messages[1] = {"role": "user", "content": first_msg}
+        
+        # record the times of reading sections
+        if "action_name" in info and "read_section" in info["action_name"]:
+            section_name = info.get("section_name")
+            self.log.record_section_visit(section_name)
+
+        # record search queries
+        if "action_name" in info and "search_paper" in info["action_name"]:
+            query = info.get("query", "")
+            if query:
+                self.log.record_search_query(query)
+
+        if self._trajectory.steps:
+            # assgin the reward for the executed action of this step.
+            current_state = self.get_current_state()
+            current_state.reward = reward
+            current_state.done = done
+            current_state.action = self._last_action
+
+            # Store log snapshot and env info
+            # All credit assignment reads from log_snapshot (single source of truth)
+            current_state.info = {
+                **info,
+                "log_snapshot": self.log.model_dump()
+            }
+
+        # Create a new step to trajectory
+        step = Step(
+            observation=obs_content
+        )
+
+        self._trajectory.steps.append(step)
+
+        # Clear last action tracking
+        self._last_memory_results = []
+
+    def update_from_model(self, response: str) -> Action:
+        """Parse and process LLM response.
+
+        Called after LLM generates a response. This method:
+        1. Parses the JSON response
+        2. Executes memory operation s (local state update)
+        3. Prepares action for environment
+
+        Args:
+            response: Raw LLM response text (expected JSON)
 
         Returns:
-            Tuple of (decision_dict, response_message_dict) where decision_dict contains:
-            {
-                "memory_operations": [...],
-                "action": {"name": "...", "args": {...}}
-            }
+            Action wrapping the action dict for the environment
+
+        Raises:
+            ValueError: If response cannot be parsed
         """
-        # Ensure all messages are dicts
-        trajectory_dicts = [self._message_to_dict(msg) for msg in trajectory]
+        assert self.trajectory.steps, "Trajectory should not be empty when update_from_model is called."
 
-        # Call LLM WITHOUT tools parameter (so it returns text/JSON)
-        llm_response = call_llm(
-            model=self.model,
-            messages=trajectory_dicts,
-            temperature=0.7,
-            response_format={"type": "json_object"}  # Request JSON output
-        )
-        response_message = llm_response.choices[0].message
-        response_content = response_message.content
+        self._last_llm_response = response
 
-        self.logger.info(f"LLM response: {response_content[:200]}...")
+        # Update the current step in the trajectory
+        cur_step = self.get_current_state()
+        cur_step.model_response = response
+        # Snapshot the sliding window messages + this assistant response.
+        # This matches exactly what the LLM saw during inference, so tokenize_and_mask
+        # will produce the correct prompt/response split for training.
+        cur_step.chat_completions = copy.deepcopy(self._messages) + [{"role": "assistant", "content": response}]
 
-        # Parse JSON
+        # Parse decision from response
+        decision = self._parse_decision(response)
+
+        # if the decision is a string, it means parsing failed and we return a format_error action
+        if isinstance(decision, str):
+            self.logger.error(f"Failed to parse LLM response: {decision}")
+            return Action(action={"name": "format_error", "args": {"message": decision}, "_meta": {"mem_success": 0, "mem_error": 0, "mem_duplicates": 0, "mem_hallucinations": 0}})
+
+        # Execute memory operations locally
+        self._last_memory_results = []
+        validation_error_count = 0
+        for mem_op in decision.get("memory_operations", []):
+            result, is_validation_error = self._execute_memory_operation(mem_op)
+            self._last_memory_results.append(result)
+            if is_validation_error:
+                validation_error_count += 1
+
+        # Count memory operation successes vs errors
+        mem_success = sum(1 for r in self._last_memory_results if r.startswith("Successfully"))
+        mem_duplicates_skipped = sum(1 for r in self._last_memory_results if r.startswith("Skipped:"))
+        mem_duplicates = sum(1 for r in self._last_memory_results if "too similar to" in r)
+        mem_hallucinations = sum(1 for r in self._last_memory_results if "Hallucinated evidence references" in r)
+        # mem_error: includes duplicates that raised errors (not silently skipped ones)
+        # Silently skipped duplicates are neutral — no penalty, no reward.
+        mem_error = len(self._last_memory_results) - mem_success - mem_duplicates_skipped - validation_error_count - mem_hallucinations
+        meta = {
+            "mem_success": mem_success,
+            "mem_error": mem_error,
+            "mem_duplicates": mem_duplicates,
+            "mem_hallucinations": mem_hallucinations,
+            "validation_errors": validation_error_count,
+            "sections_read": set(self.log.section_visits.keys()),
+        }
+
+        # Store action for trajectory
+        action = decision["action"]
+
+        # Enrich action with data from memory so environment doesn't need agent_log
+        action_name = action.get("name")
+
+        # If it's a research action, enrich it with claim/question object
+        if action_name == "research":
+            args = action.get("args", {})
+
+            # Determine target type and ID
+            claim_id = args.get("claim_id")
+            question_id = args.get("question_id")
+
+            if claim_id:
+                # Retrieve claim from memory
+                claim = self.log.get_claim(claim_id)
+                if not claim:
+                    # Return tool_error action if claim not found
+                    return Action(action={
+                        "name": "tool_error",
+                        "args": {"original_action": "research", "message": f"Claim {claim_id} not found in memory"},
+                        "_meta": meta,
+                    })
+
+                # Serialize claim to dict instead of passing object
+                args["claim_data"] = {
+                    "id": claim.id,
+                    "text": claim.text,
+                    "section": claim.section,
+                    "type": claim.type,
+                    "status": claim.status,
+                    "issues": claim.issues,
+                    "cross_references": claim.cross_references,
+                    "verifier_reason": claim.verifier_reason
+                }
+                action["args"] = args
+
+            elif question_id:
+                # Retrieve question from memory
+                question = self.log.get_question(question_id)
+                if not question:
+                    # Return tool_error action if question not found
+                    return Action(action={
+                        "name": "tool_error",
+                        "args": {"original_action": "research", "message": f"Question {question_id} not found in memory"},
+                        "_meta": meta,
+                    })
+
+                # Serialize question to dict instead of passing object
+                args["question_data"] = {
+                    "id": question.id,
+                    "question": question.question,
+                    "source_section": question.source_section,
+                    "status": question.status,
+                    "type": question.type,
+                    "answer": question.answer,
+                    "answer_sections": question.answer_sections,
+                    "related_claims": question.related_claims
+                }
+                action["args"] = args
+
+            else:
+                # Neither claim_id nor question_id provided
+                return Action(action={
+                    "name": "tool_error",
+                    "args": {"original_action": "research", "message": "Research action must specify claim_id or question_id"},
+                    "_meta": meta,
+                })
+
+        # If it's a finish action, enrich it with review data
+        elif action_name == "finish":
+            args = action.get("args", {})
+
+            # Extract review outline from memory
+            outline = self.log.review_outline
+            # Convert OutlineItems to text for compatibility
+            args["review_data"] = {
+                "summary": outline.summary,
+                "strengths": outline.get_strengths_text(),
+                "weaknesses": outline.get_weaknesses_text(),
+                "questions": outline.get_questions_text(),
+                "overall_score": outline.overall_score
+            }
+            action["args"] = args
+
+        # Attach meta info for syntactic reward tracking
+        action["_meta"] = meta
+
+        self._last_action = action
+
+        return Action(action=action)
+
+    @property
+    def chat_completions(self) -> List[Dict[str, str]]:
+        """Get messages for LLM chat completion.
+
+        manage the current input messages for the LLM, which includes:
+        1. System prompt (static)
+        2. Initial observation with paper info (first step)
+        3. updated_memory
+        4. last action result
+        """
+        return self._messages
+
+    @property
+    def trajectory(self) -> Trajectory:
+        """Get the current trajectory."""
+        return self._trajectory
+
+    def get_log(self) -> ReviewLog:
+        """Get the current review log state."""
+        return self.log
+
+    def _parse_decision(self, response_text: str) -> Dict:
+        """Parse LLM response JSON into decision dict.
+
+        Args:
+            response_text: Raw text from LLM
+
+        Returns:
+            Parsed decision dict with 'memory_operations' and 'action'
+
+        Raises:
+            ValueError: If parsing fails
+        """
+        before, sep, after = response_text.strip().partition("</think>")
+        text = after if sep else before
+
+        # Handle markdown code blocks
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        # Fix invalid escape sequences (LaTeX notation like \hat, \alpha)
+        text = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
+
         try:
-            decision = json.loads(response_content)
+            decision = json.loads(text)
+            # Validate and normalize structure
+            if "memory_operations" not in decision:
+                decision["memory_operations"] = []
 
-            # Validate structure
-            if "memory_operations" not in decision or "action" not in decision:
-                raise ValueError("Missing 'memory_operations' or 'action' in response")
+            if "action" not in decision:
+                raise ValueError("Missing 'action' in response")
 
             if not isinstance(decision["memory_operations"], list):
                 raise ValueError("'memory_operations' must be a list")
 
+            # Validate each memory operation is a dict with 'op' field
+            for i, mem_op in enumerate(decision["memory_operations"]):
+                if not isinstance(mem_op, dict):
+                    raise ValueError(f"memory_operations[{i}] must be a dict, got {type(mem_op).__name__}")
+                if "op" not in mem_op:
+                    raise ValueError(f"memory_operations[{i}] missing required 'op' field")
+
             if not isinstance(decision["action"], dict) or "name" not in decision["action"]:
                 raise ValueError("'action' must be a dict with 'name' field")
 
-            self.logger.info(f"Parsed decision: {len(decision['memory_operations'])} memory ops, action={decision['action']['name']}")
-
-            # Convert response_message to dict
-            response_dict = {
-                "role": "assistant",
-                "content": response_content
-            }
-
-            return decision, response_dict
+            return decision
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse JSON response: {e}")
-            self.logger.error(f"Response content: {response_content}")
-            raise ValueError(f"LLM returned invalid JSON: {e}")
+            return "The response could not be parsed as valid JSON. Please ensure your response follows the specified format. Error details: " + str(e)
         except ValueError as e:
-            self.logger.error(f"Invalid decision structure: {e}")
-            raise
+            return f"JSON was parsed but has invalid structure: {e}. Please ensure your response includes a valid 'action' dict with a 'name' field."
 
-    def review_paper(self, environment: PaperEnvironment, max_iterations: int = 50) -> List[dict]:
-        """Review paper using evidence-based methodology.
-
-        Maintains minimal state:
-        - Initial system and user prompts
-        - Last assistant message
-        - Last observations (tool responses)
-        - Current log context
-
-        Args:
-            environment: The paper environment containing the paper to review
-            max_iterations: Maximum number of iterations
-
-        Returns:
-            Full trajectory with all messages for analysis
-        """
-        self.logger.info("Starting evidence-based paper review...")
-
-        # Build initial trajectory
-        initial_trajectory, title, sections_list = self._build_initial_trajectory(environment)
-
-        # Full trajectory for analysis
-        full_trajectory = initial_trajectory.copy()
-
-        # Reset state
-        self.log = ReviewLog()
-        last_assistant_message = None
-        last_observations = []
-
-        # Agent loop with token tracking
-        for iteration in range(max_iterations):
-            self.logger.info(f"\n--- Iteration {iteration + 1}/{max_iterations} ---")
-            self.log.current_iteration = iteration + 1
-
-            # Build minimal trajectory for decision
-            minimal_trajectory = self._build_minimal_trajectory(
-                initial_trajectory, last_assistant_message, last_observations
-            )
-
-            # Decide next action (returns decision dict + response message)
-            # Wrap with agent context for token tracking
-            with token_tracker.agent_context("main_agent"):
-                decision, response_message = self._decide_next_action(minimal_trajectory)
-
-            # Add assistant message to trajectory
-            last_assistant_message = response_message
-            full_trajectory.append(last_assistant_message)
-
-            # Execute memory operations
-            memory_results = []
-            for mem_op in decision["memory_operations"]:
-                result = self._execute_memory_operation(mem_op)
-                memory_results.append(result)
-
-            # Execute external action
-            action = decision["action"]
-            action_name = action["name"]
-            action_args = action.get("args", {})
-
-            if action_name == "finish":
-                # Terminal action - review complete
-                self.logger.info("Agent finished review.")
-                last_observation = {
-                    "role": "user",
-                    "content": "<observation>Review complete.</observation>"
-                }
-                full_trajectory.append(last_observation)
-                return full_trajectory
-
-            elif action_name == "read_section":
-                action_response = self._execute_read_section_action(environment, action_args)
-
-            elif action_name == "research":
-                if self.use_research_subagent:
-                    action_response = self._execute_research_action(environment, action_args)
-                else:
-                    action_response = "Error: 'research' action not available in direct mode (use 'search_paper' instead)"
-                    self.logger.error(action_response)
-
-            elif action_name == "search_paper":
-                if not self.use_research_subagent:
-                    action_response = self._execute_search_paper_action(environment, action_args)
-                else:
-                    action_response = "Error: 'search_paper' action not available with research subagent mode (use 'research' instead)"
-                    self.logger.error(action_response)
-
-            else:
-                action_response = f"Error: Unknown action '{action_name}'"
-                self.logger.error(action_response)
-
-            # Create observation with memory operation results
-            observation_content = "<observation>\n"
-            if memory_results:
-                observation_content += "<log_update>\n" + "\n".join(memory_results) + "\n</log_update>\n\n"
-            observation_content += f"<action_result>\n{action_response}\n</action_result>\n"
-            observation_content += "</observation>"
-
-            last_observation = {
-                "role": "user",
-                "content": observation_content
-            }
-            full_trajectory.append(last_observation)
-            last_observations = [last_observation]
-
-        # Max iterations reached - force review synthesis
-        self.logger.warning("Max iterations reached. Synthesizing review from current log.")
-        synthesized_review = self._synthesize_review(environment)
-
-        # Update the log's review outline with synthesized content
-        if synthesized_review:
-            self.log.review_outline.summary = synthesized_review.get('summary', '')
-            self.log.review_outline.strengths = synthesized_review.get('strengths', [])
-            self.log.review_outline.weaknesses = synthesized_review.get('weaknesses', [])
-            self.log.review_outline.questions = synthesized_review.get('questions', [])
-            self.log.review_outline.overall_score = synthesized_review.get('overall_score')
-
-        full_trajectory.append({
-            "role": "assistant",
-            "content": f"[Max iterations reached - synthesized review]\n{json.dumps(synthesized_review, indent=2)}"
-        })
-        return full_trajectory
-
-    def _build_minimal_trajectory(
-        self,
-        initial_trajectory: List[dict],
-        last_assistant_message: Optional[Union[Dict, Message]],
-        last_observations: List[Dict]
-    ) -> List[dict]:
-        """Build minimal trajectory with current state.
-
-        Args:
-            initial_trajectory: Initial system and user prompts
-            last_assistant_message: Last LLM response (dict or Message)
-            last_observations: List of tool responses for the last assistant message
-            updated_memory: List of memory operation results
-
-        Returns:
-            Minimal trajectory for LLM decision
-        """
-        trajectory = initial_trajectory.copy()
-
-        # Add last action (assistant message) if exists
-        if last_assistant_message:
-            assistant_dict = self._message_to_dict(last_assistant_message)
-
-            # Ensure all tool calls have corresponding responses
-            if assistant_dict.get('tool_calls'):
-                tool_call_ids = {tc.get('id') for tc in assistant_dict.get('tool_calls', [])}
-                observation_ids = {obs.get('tool_call_id') for obs in last_observations if obs.get('tool_call_id')}
-
-                missing_ids = tool_call_ids - observation_ids
-                if missing_ids:
-                    raise ValueError(f"Missing tool responses for tool calls: {missing_ids}")
-
-            trajectory.append(assistant_dict)
-
-        # Add all tool observations
-        for observation in last_observations:
-            trajectory.append(observation)
-
-        # Add current log context
-        log_context = self.log.build_context(detailed=False, max_claims=10)
-        trajectory.append({
-            "role": "user",
-            "content": f"<log_context>\n{log_context}\n</log_context>"
-        })
-
-        return trajectory
-
-    def _execute_memory_operation(self, mem_op: Dict) -> str:
-        """Execute a memory operation.
+    def _execute_memory_operation(self, mem_op: Dict) -> tuple[str, bool]:
+        """Execute a memory operation on the review log.
 
         Handles 3 ops:
         - log: dispatches to add_claim/add_question/add_note based on args.type (claims use args.claim_type, questions use args.question_type)
         - update: dispatches to update_claim_status/resolve_question based on entry_id prefix
-        - draft: maps to update_outline
+        - outline: maps to update_outline
 
         Args:
             mem_op: Memory operation dict with 'op' and 'args'
 
         Returns:
-            Result message string
+            Tuple of (result message string, is_validation_error boolean)
         """
         op_name = mem_op.get("op")
         args = mem_op.get("args", {})
@@ -337,165 +453,205 @@ class ProReviewer(BaseReviewAgent):
         elif op_name == "outline":
             return self._handle_outline(args)
         else:
-            return f"Error: Unknown memory operation '{op_name}'."
+            return (f"Error: Unknown memory operation '{op_name}'.", False)
 
-    def _execute_read_section_action(self, environment: PaperEnvironment, args: Dict) -> str:
-        """Execute read_section action."""
-        section_name = args['section_name']
-        self.logger.info(f"Agent decided to read section: {section_name}")
+    def _handle_log(self, args: Dict) -> tuple[str, bool]:
+        """Handle 'log' operation -- dispatch based on args['type'].
 
-        content = environment.read_section(section_name)
-
-        # Track section visit
-        self.log.record_section_visit(section_name)
-
-        return f"Successfully read section '{section_name}'. Content:\n{content}"
-
-    def _execute_search_paper_action(self, environment: PaperEnvironment, args: Dict) -> str:
-        """Execute search_paper action — search the paper for a query string.
-
-        Only available in direct mode (use_research_subagent=False).
+        Returns:
+            Tuple of (result message string, is_validation_error boolean)
         """
-        query = args.get('query', '')
-        if not query:
-            return "Error: Missing query parameter"
-
-        self.logger.info(f"Agent searching paper for: {query}")
-        self.log.record_search_query(query)
-        results = environment.search_paper(query)
-
-        if not results:
-            return f"No matches found for '{query}'"
-
-        # Format results
-        output = f"Search results for '{query}':\n\n"
-        for result in results:
-            output += f"**[{result['section']}]** ({result['match_count']} matches)\n"
-            for snippet in result['snippets']:
-                output += f"  - {snippet}\n"
-            output += "\n"
-
-        return output
-
-    def _handle_log(self, args: Dict) -> str:
-        """Handle 'log' operation -- dispatch based on args['type']."""
         entry_type = args.get("type")
         text = args.get("text")
         section = args.get("section")
 
         if not entry_type:
-            return "Error: 'log' operation requires 'type' field (claim|question|note)."
+            return ("Error: 'log' operation requires 'type' field (claim|question|note).", False)
+
+        # Gate: reject log operations that reference sections not yet visited.
+        # Prevents reward hacking where the model pre-loads claims at step 0
+        # before reading the paper to game evidence-based credit assignment.
+        # Natural behavior: read section X first, then log about it in the next step.
+        # Only empty section is exempt — to avoid misclassifying a missing 'section'
+        # field (format error) as a hallucination; the type-specific checks below
+        # will catch and report that as a proper format error.
+        #
+        # Exception: the SFT-trained model always emits a planning note at step 0
+        # ("Starting Phase 1 - Orientation. Reading...") with section set to the
+        # section it reads in the same action.  This is benign boilerplate, not
+        # fabricated evidence, so skip the hallucination check for it.
+        is_step0_planning_note = (
+            not self.log.section_visits
+            and entry_type == "note"
+            and text
+            and text.startswith("Starting Phase 1")
+        )
+        section_str = (section or "").strip().lower()
+        if section_str and not is_step0_planning_note:
+            visited_lower = {s.lower() for s in self.log.section_visits.keys()}
+            if section_str not in visited_lower:
+                return (
+                    f"Hallucinated evidence references: section '{section}' has not been read yet. "
+                    f"You must read the section first before logging claims, questions, or notes about it.",
+                    False,
+                )
 
         if entry_type == "claim":
             claim_type = args.get("claim_type")
             if not all([text, section, claim_type]):
-                return "Error: claim log requires 'text', 'section', and 'claim_type'."
+                return ("Error: claim log requires 'text', 'section', and 'claim_type'.", False)
             issues = args.get("issues", None)
             try:
-                claim_id = self.log.add_claim(text, section, claim_type, issues)
-                self.logger.info(f"Added claim {claim_id}: {text[:50]}...")
-                return f"Successfully added claim {claim_id} to log."
+                claim_id = self.log.add_claim(text, section, claim_type, issues, step=len(self._trajectory.steps) - 1)
+                if claim_id is None:
+                    # Silently skipped duplicate — no penalty, but inform model
+                    return (f"Skipped: this claim is too similar to an existing one. Try a different point.", False)
+                self.logger.debug(f"Added claim {claim_id}: {text[:50]}...")
+                return (f"Successfully added claim {claim_id} to log.", False)
+            except ValueError as e:
+                # Duplicate claim — route to mem_error (tool penalty), not validation_errors (format penalty)
+                return (f"Error: {str(e)}", False)
             except ValidationError as e:
                 error_msg = f"Validation error when adding claim: {str(e)}"
                 self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return (f"Error: {error_msg}", True)
 
         elif entry_type == "question":
             if not all([text, section]):
-                return "Error: question log requires 'text' and 'section'."
+                return ("Error: question log requires 'text' and 'section'.", False)
             question_type = args.get("question_type", "clarification")
             related_claims = args.get("related_claims", None)
             try:
-                question_id = self.log.add_question(text, section, question_type, related_claims)
-                self.logger.info(f"Added question {question_id}: {text[:50]}...")
-                return f"Successfully added question {question_id} to log."
+                question_id = self.log.add_question(text, section, question_type, related_claims, step=len(self._trajectory.steps) - 1)
+                if question_id is None:
+                    return (f"Skipped: this question is too similar to an existing one. Try a different point.", False)
+                self.logger.debug(f"Added question {question_id}: {text[:50]}...")
+                return (f"Successfully added question {question_id} to log.", False)
+            except ValueError as e:
+                # Duplicate question — route to mem_error (tool penalty), not validation_errors (format penalty)
+                return (f"Error: {str(e)}", False)
             except ValidationError as e:
                 error_msg = f"Validation error when adding question: {str(e)}"
                 self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return (f"Error: {error_msg}", True)
 
         elif entry_type == "note":
             if not all([text, section]):
-                return "Error: note log requires 'text' and 'section'."
+                return ("Error: note log requires 'text' and 'section'.", False)
             tag = args.get("tag", [])
+            # Ensure tag is always a list (handle cases where LLM returns a string)
+            if isinstance(tag, str):
+                tag = [tag]
             try:
-                note_id = self.log.add_note(text, section, tag)
-                self.logger.info(f"Added note {note_id}: {text[:50]}...")
-                return f"Successfully added note {note_id} to log."
+                note_id = self.log.add_note(text, section, tag, step=len(self._trajectory.steps) - 1)
+                if note_id is None:
+                    return (f"Skipped: this note is too similar to an existing one. Try a different point.", False)
+                self.logger.debug(f"Added note {note_id}: {text[:50]}...")
+                return (f"Successfully added note {note_id} to log.", False)
+            except ValueError as e:
+                # Duplicate note — route to mem_error (tool penalty), not validation_errors (format penalty)
+                return (f"Error: {str(e)}", False)
             except ValidationError as e:
                 error_msg = f"Validation error when adding note: {str(e)}"
                 self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return (f"Error: {error_msg}", True)
 
         else:
-            return f"Error: Unknown log type '{entry_type}'. Must be claim, question, or note."
+            return (f"Error: Unknown log type '{entry_type}'. Must be claim, question, or note.", False)
 
-    def _handle_update(self, args: Dict) -> str:
-        """Handle 'update' operation -- dispatch based on entry_id prefix."""
+    def _handle_update(self, args: Dict) -> tuple[str, bool]:
+        """Handle 'update' operation -- dispatch based on entry_id prefix.
+
+        Returns:
+            Tuple of (result message string, is_validation_error boolean)
+        """
         entry_id = args.get("entry_id")
         if not entry_id:
-            return "Error: 'update' operation requires 'entry_id'."
+            return ("Error: 'update' operation requires 'entry_id'.", False)
+
+        if not isinstance(entry_id, str):
+            return (f"Error: 'entry_id' must be a string, got {type(entry_id).__name__}: {entry_id}", True)
 
         if entry_id.startswith("C"):
             # Claim update
             status = args.get("status")
             reasoning = args.get("reasoning")
             if not all([status, reasoning]):
-                return "Error: claim update requires 'status' and 'reasoning'."
+                return ("Error: claim update requires 'status' and 'reasoning'.", False)
             valid_statuses = ["to_be_verified", "supported", "weak", "invalid"]
             if status not in valid_statuses:
-                return f"Error: Invalid claim status '{status}'. Must be one of: {', '.join(valid_statuses)}"
+                return (f"Error: Invalid claim status '{status}'. Must be one of: {', '.join(valid_statuses)}", False)
             cross_references = args.get("cross_references", [])
             try:
-                success = self.log.update_claim_status(entry_id, status, reasoning, cross_references)
+                success = self.log.update_claim_status(entry_id, status, reasoning, cross_references, step=len(self._trajectory.steps) - 1)
                 if success:
-                    self.logger.info(f"Updated claim {entry_id} status to {status}")
-                    return f"Successfully updated claim {entry_id} status to '{status}'."
+                    self.logger.debug(f"Updated claim {entry_id} status to {status}")
+                    return (f"Successfully updated claim {entry_id} status to '{status}'.", False)
                 else:
-                    return f"Error: Claim {entry_id} not found in log."
+                    return (f"Error: Claim {entry_id} not found in log.", False)
             except ValidationError as e:
                 error_msg = f"Validation error when updating claim {entry_id}: {str(e)}"
                 self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return (f"Error: {error_msg}", True)
 
         elif entry_id.startswith("Q"):
             # Question update
             status = args.get("status", "resolved")
             answer = args.get("answer")
             if not answer:
-                return "Error: question update requires 'answer'."
+                return ("Error: question update requires 'answer'.", False)
             valid_statuses = ["resolved", "partially_answered"]
             if status not in valid_statuses:
-                return f"Error: Invalid question status '{status}'. Must be one of: {', '.join(valid_statuses)}"
+                return (f"Error: Invalid question status '{status}'. Must be one of: {', '.join(valid_statuses)}", False)
             answer_sections = args.get("answer_sections", [])
             try:
                 success = self.log.resolve_question(entry_id, answer, answer_sections, status)
                 if success:
-                    self.logger.info(f"Updated question {entry_id}")
-                    return f"Successfully updated question {entry_id}."
+                    self.logger.debug(f"Updated question {entry_id}")
+                    return (f"Successfully updated question {entry_id}.", False)
                 else:
-                    return f"Error: Question {entry_id} not found in log."
+                    return (f"Error: Question {entry_id} not found in log.", False)
             except ValidationError as e:
                 error_msg = f"Validation error when updating question {entry_id}: {str(e)}"
                 self.logger.error(error_msg)
-                return f"Error: {error_msg}"
+                return (f"Error: {error_msg}", True)
 
         else:
-            return f"Error: Cannot update entry '{entry_id}'. Only claims (C*) and questions (Q*) can be updated."
+            return (f"Error: Cannot update entry '{entry_id}'. Only claims (C*) and questions (Q*) can be updated.", False)
 
-    def _handle_outline(self, args: Dict) -> str:
-        """Handle 'outline' operation -- maps to update_outline."""
+    def _handle_outline(self, args: Dict) -> tuple[str, bool]:
+        """Handle 'outline' operation -- maps to update_outline.
+
+        Returns:
+            Tuple of (result message string, is_validation_error boolean)
+        """
         section = args.get("section")
         content = args.get("content")
         tags = args.get("tags", [])
 
         if not all([section, content is not None]):
-            return "Error: 'outline' requires 'section' and 'content'."
+            return ("Error: 'outline' requires 'section' and 'content'.", False)
+
+        # overall_score naturally comes as int/float — coerce to str
+        if section == "overall_score" and isinstance(content, (int, float)):
+            content = str(int(content))
+            args["content"] = content
+
+        if not isinstance(content, str):
+            return ("Error: 'content' must be a string, not a list or object.", True)
 
         # Validate section name
         valid_sections = ["summary", "strengths", "weaknesses", "questions", "overall_score"]
         if section not in valid_sections:
-            return f"Error: Invalid outline section '{section}'. Must be one of: {', '.join(valid_sections)}"
+            return (f"Error: Invalid outline section '{section}'. Must be one of: {', '.join(valid_sections)}", False)
+
+        # Sections that require at least one evidence tag
+        if section in ("strengths", "weaknesses", "questions") and not tags:
+            return (
+                "Error: 'tags' is required for outline strengths/weaknesses/questions. "
+                "Provide at least one claim (C*), question (Q*), or note (N*) ID.",
+                True,
+            )
 
         # Parse tags into claim/question/note IDs
         related_claims = [t for t in tags if t.startswith('C')]
@@ -503,176 +659,50 @@ class ProReviewer(BaseReviewAgent):
         related_notes = [t for t in tags if t.startswith('N')]
 
         try:
-            self.log.update_outline(
+            result = self.log.update_outline(
                 section=section,
                 content=content,
                 append=True,
                 related_claims=related_claims,
                 related_questions=related_questions,
-                related_notes=related_notes
+                related_notes=related_notes,
+                step=len(self._trajectory.steps) - 1
             )
-            self.logger.info(f"Updated outline {section} with evidence tags: {tags}")
-            return f"Successfully updated outline {section}."
+            if result == "duplicate_skipped":
+                return (f"Skipped: this {section} point is too similar to an existing one. Try a different point.", False)
+            self.logger.debug(f"Updated outline {section} with evidence tags: {tags}")
+            return (f"Successfully updated outline {section}.", False)
         except ValueError as e:
-            return f"Error: {str(e)}"
+            error_msg = str(e)
+            if "Hallucinated evidence references" in error_msg:
+                # Hallucination: model referenced IDs that don't exist in the log.
+                # Counted in mem_hallucinations → hard -1.0 syntactic penalty.
+                # is_validation_error=False so it doesn't also trigger format penalty.
+                self.logger.warning(f"Hallucinated tags in outline {section}: {error_msg}")
+                return (f"Error: {error_msg}", False)
+            if "too similar to existing" in error_msg:
+                # Duplicate outline entry: well-formed op, just redundant content.
+                # Counted in mem_duplicates (no penalty — info_gain handles novelty).
+                # is_validation_error=False so it doesn't trigger format penalty.
+                self.logger.warning(f"Duplicate outline entry in {section}: {error_msg}")
+                return (f"Error: {error_msg}", False)
+            # Missing-evidence or other format errors → validation penalty (R_format)
+            self.logger.error(f"Validation error in outline {section}: {error_msg}")
+            return (f"Error: {error_msg}", True)
 
-    def _execute_research_action(self, environment: PaperEnvironment, args: Dict) -> str:
-        """Execute research action by delegating to research subagent.
-
-        The research subagent will autonomously investigate to verify claims or answer questions.
-        """
-        target_id = args.get('claim_id') or args.get('question_id')
-        target_type = 'claim' if 'claim_id' in args else 'question'
-        additional_context = args.get('additional_context', None)
-
-        if not target_id:
-            return "Error: Must provide either claim_id or question_id"
-
-        self.logger.info(f"Main agent delegating research for {target_type}: {target_id}")
-
-        # Get the target (claim or question)
-        if target_type == 'claim':
-            target = self.log.get_claim(target_id)
-            if not target:
-                return f"Error: Claim {target_id} not found in log."
-        else:
-            target = self.log.get_question(target_id)
-            if not target:
-                return f"Error: Question {target_id} not found in log."
-
-        # Delegate to research subagent with token tracking
-        try:
-            with token_tracker.agent_context("research_subagent"):
-                findings = self.research_subagent.research(
-                    environment=environment,
-                    target_type=target_type,
-                    target=target,
-                    max_iterations=20
-                )
-
-            # Return findings to main agent for judgment
-            # The main agent will decide how to update log based on these findings
-            summary = findings['summary']
-            cross_refs = findings['cross_references']
-            evidence = findings.get('evidence', [])
-
-            if target_type == 'claim':
-                response = f"Research complete for {target_id}.\n\n"
-                response += f"**Claim being verified**: {target.text}\n\n"
-                response += f"**Research findings**:\n"
-                response += f"- Summary: {summary}\n"
-                response += f"- Sections examined: {', '.join(cross_refs) if cross_refs else 'none'}\n\n"
-                # response += f"- Detailed reasoning: {reasoning}\n\n"
-                if evidence:
-                    response += f"**Evidence collected**:\n"
-                    for e in evidence[:3]:  # Show top 3 pieces of evidence
-                        response += f"  - [{e.get('section', 'N/A')}] {e.get('finding', 'N/A')}\n"
-                response += f"\n**Your judgment needed**: Review these findings and decide how to update the claim's status using the update memory operation."
-
-            else:  # question
-                response = f"Research complete for {target_id}.\n\n"
-                response += f"**Question being investigated**: {target.question}\n\n"
-                response += f"**Research findings**:\n"
-                response += f"- Summary: {summary}\n"
-                response += f"- Sections examined: {', '.join(cross_refs) if cross_refs else 'none'}\n\n"
-                # response += f"- Answer/Findings: {reasoning}\n\n"
-                if evidence:
-                    response += f"**Evidence collected**:\n"
-                    for e in evidence[:3]:  # Show top 3 pieces of evidence
-                        response += f"  - [{e.get('section', 'N/A')}] {e.get('finding', 'N/A')}\n"
-                response += f"\n**Your judgment needed**: Review these findings and decide how to resolve the question using the update memory operation."
-
-            self.logger.info(f"Research subagent completed with summary: {summary}. Main agent will judge findings.")
-            return response
-
-        except Exception as e:
-            self.logger.error(f"Research failed: {e}")
-            return f"Error during research: {str(e)}"
-
-    def _synthesize_review(self, environment: PaperEnvironment) -> Dict:
-        """Synthesize a review when max iterations reached.
-
-        Uses the current ReviewLog state to generate a final review.
-
-        Args:
-            environment: The paper environment (for context if needed)
+    def get_review_from_log(self) -> Dict:
+        """Extract the final review from the log.
 
         Returns:
-            Dictionary with review fields (summary, strengths, weaknesses, questions, overall_score)
+            Dict with summary, strengths, weaknesses, questions, overall_score
+            (with strengths/weaknesses/questions as List[str] for compatibility)
         """
-        # Build prompt with full log context
-        log_context = self.log.build_context(detailed=True)
-
-        synthesis_prompt = f"""You have reached the maximum iterations for reviewing this paper.
-Based on all the evidence collected so far, you MUST now produce a final review.
-
-{log_context}
-
-Generate a complete review JSON with:
-- summary: Brief summary of the paper
-- strengths: List of key strengths
-- weaknesses: List of key weaknesses
-- questions: Questions for authors
-- overall_score: Score from 1-10
-
-Output ONLY valid JSON."""
-
-        with token_tracker.agent_context("main_agent"):
-            response = call_llm(
-                model=self.model,
-                messages=[{"role": "user", "content": synthesis_prompt}],
-                temperature=0.3
-            )
-        content = response.choices[0].message.content
-
-        # Parse and return the review
-        return self._parse_synthesized_review(content)
-
-    def _parse_synthesized_review(self, content: str) -> Dict:
-        """Parse synthesized review JSON from LLM response.
-
-        Args:
-            content: Raw LLM response containing JSON
-
-        Returns:
-            Parsed review dictionary
-        """
-        # Handle markdown code blocks
-        if "```json" in content:
-            start = content.find("```json") + 7
-            end = content.find("```", start)
-            content = content[start:end].strip()
-        elif content.startswith("```"):
-            lines = content.split('\n')
-            content = '\n'.join(lines[1:-1]).strip()
-
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse synthesized review: {e}")
-            # Return minimal review from log state
-            # Convert OutlineItems to text for compatibility
-            return {
-                "summary": self.log.review_outline.summary or "Review incomplete due to iteration limit.",
-                "strengths": self.log.review_outline.get_strengths_text(),
-                "weaknesses": self.log.review_outline.get_weaknesses_text(),
-                "questions": self.log.review_outline.get_questions_text(),
-                "overall_score": self.log.review_outline.overall_score
-            }
-
-    def get_log(self) -> ReviewLog:
-        """Get the current review log state.
-
-        Returns:
-            The ReviewLog object
-        """
-        return self.log
-
-    # Backward compatibility alias
-    def get_memory(self) -> ReviewLog:
-        """Get the current review log state (backward compatibility).
-
-        Returns:
-            The ReviewLog object
-        """
-        return self.log
+        outline = self.log.review_outline
+        # Convert OutlineItems to text for compatibility with reward calculation
+        return {
+            "summary": outline.summary,
+            "strengths": outline.get_strengths_text(),
+            "weaknesses": outline.get_weaknesses_text(),
+            "questions": outline.get_questions_text(),
+            "overall_score": outline.overall_score,
+        }

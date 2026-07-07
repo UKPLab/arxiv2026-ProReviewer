@@ -1,730 +1,588 @@
-"""Simplified evaluation system for comparing review agent performance.
+"""Inference and evaluation for the Reviewer-R1 agent.
 
-This module provides evaluation framework for two scenarios:
-1. Detection: Evaluate error detection accuracy
-2. Quality: Evaluate review quality across multiple dimensions
+Three entry points:
+  - load_test_data: load paper triplet JSONs
+  - run_inference:  run ProReviewer + ReviewEnv loop for one paper
+  - score_reviews:  score pre-generated review JSONs using async_score_review
+
+CLI:
+  python -m reviewer.evaluation --mode infer  --model claude-opus-4 --test_data data/test_data --output_dir outputs/reviews
+  python -m reviewer.evaluation --mode score  --reviews_dir outputs/reviews --triplets_dir data/test_data --output_dir outputs/eval
+  python -m reviewer.evaluation --mode run    --model claude-opus-4 --test_data data/test_data --output_dir outputs/eval
 """
 
-import os
-import json
-import warnings
 import argparse
+import asyncio
+import json
+import logging
+import os
+import re
 from datetime import datetime
-from enum import Enum
-from typing import List, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-import numpy as np
-from tqdm import tqdm
+from reviewer.core.proreviewer import ProReviewer
+from reviewer.core.review_env import ReviewEnv
+from utils.helpers.llm import acall_llm, get_content
 
-from reviewer.legacy.judge_prompts import (
-    DETECTION_JUDGE_SYSTEM_PROMPT,
-    DETECTION_JUDGE_USER_PROMPT,
-    QUALITY_JUDGE_SYSTEM_PROMPT,
-    QUALITY_JUDGE_USER_PROMPT,
-    DEFAULT_JUDGE_MODEL
-)
-from utils.helpers.llm import call_llm, get_content
-
-try:
-    from reviewer.reward.calculator import RewardCalculator
-    REWARDS_AVAILABLE = True
-except ImportError:
-    REWARDS_AVAILABLE = False
-    RewardCalculator = None
+logger = logging.getLogger(__name__)
 
 
-class EvaluationScenario(Enum):
-    """Evaluation scenario types."""
-    DETECTION = "detection"
-    QUALITY = "quality"
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+
+def load_test_data(data_dir: str, max_samples: Optional[int] = None) -> List[Dict]:
+    """Load paper triplet JSONs from *data_dir*.
+
+    Each JSON is expected to have at minimum:
+      - markdown.content (str)
+      - optionally: paper_id, title, scores.rating_avg
+
+    Returns a list of dicts with keys:
+      paper_id, paper_content, human_avg_score
+    """
+    files = sorted(f for f in os.listdir(data_dir) if f.endswith(".json"))
+    if max_samples is not None:
+        files = files[:max_samples]
+
+    data: List[Dict] = []
+    for fname in files:
+        with open(os.path.join(data_dir, fname)) as f:
+            triplet = json.load(f)
+
+        paper_id = triplet.get("paper_id", fname.replace(".json", ""))
+        title = triplet.get("title", "")
+        content = triplet["markdown"]["content"]
+        if title and not content.startswith(f"# {title}") and not content.lower().startswith("title:"):
+            content = f"# {title}\n\n{content}"
+
+        data.append({
+            "paper_id": paper_id,
+            "paper_content": content,
+            "human_avg_score": float(triplet.get("scores", {}).get("rating_avg", 0)),
+        })
+
+    logger.info("Loaded %d papers from '%s'", len(data), data_dir)
+    return data
 
 
-def _infer_error_type_from_path(review_dir: str, error_types: List[str]) -> Optional[str]:
-    """Extract error type from directory path.
+# ---------------------------------------------------------------------------
+# Inference
+# ---------------------------------------------------------------------------
+
+def _extract_usage(response: Any) -> Dict[str, int]:
+    """Extract token usage from an LLM response object."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    prompt = getattr(usage, "prompt_tokens", 0) or 0
+    completion = getattr(usage, "completion_tokens", 0) or 0
+    total = getattr(usage, "total_tokens", 0) or 0
+    if total == 0:
+        total = prompt + completion
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+
+async def _call_llm_with_retry(
+    model: str,
+    messages: list,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    max_retries: int = 3,
+) -> Tuple[Optional[str], Dict[str, int]]:
+    """Call LLM via acall_llm with exponential back-off."""
+    for attempt in range(max_retries):
+        try:
+            response = await acall_llm(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return get_content(response), _extract_usage(response)
+        except Exception as e:
+            wait = 2 ** attempt
+            logger.warning("LLM attempt %d/%d failed: %s. Retrying in %ds...", attempt + 1, max_retries, e, wait)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(wait)
+    logger.error("LLM call failed after %d attempts", max_retries)
+    return None, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+async def run_inference(
+    paper: Dict,
+    model: str,
+    max_steps: int = 25,
+    nudge_steps: int = 5,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    system_prompt: Optional[str] = None,
+) -> Optional[Dict]:
+    """Run the multi-turn ProReviewer + ReviewEnv loop for a single paper.
 
     Args:
-        review_dir: Directory path to check
-        error_types: List of possible error types
+        paper: dict with paper_id, paper_content, human_avg_score
+        model: LLM model identifier (litellm string, config name, or local path)
+        max_steps: maximum agent steps before nudging
+        nudge_steps: extra steps after nudge to finish
+        temperature: sampling temperature
+        max_tokens: max tokens per LLM response
+        system_prompt: optional custom system prompt (defaults to built-in)
 
     Returns:
-        Error type if found in path, None otherwise
+        Review dict with paper_id, summary, strengths, weaknesses, questions,
+        overall_score, n_steps, token_usage, trajectory; or None on failure.
     """
-    path_lower = review_dir.lower()
-    for error_type in error_types:
-        if error_type.lower() in path_lower:
-            return error_type
-    return None
+    paper_id = paper["paper_id"]
+    task = {
+        "paper_id": paper_id,
+        "paper_content": paper["paper_content"],
+        "human_avg_score": float(paper.get("human_avg_score", 0)),
+    }
 
+    env = ReviewEnv(task=task, reward_mode=["format"])
+    obs, info = env.reset()
 
-class ReviewEvaluator:
-    """Simplified evaluator for review quality assessment."""
+    agent = ProReviewer(
+        system_prompt=system_prompt,
+    )
+    agent.reset()
 
-    def __init__(
-        self,
-        ground_truth_dir: str,
-        scenario: EvaluationScenario,
-        review_dir: str,
-        agent_type: str,
-        model_name: str,
-        judge_model: Optional[str] = None,
-        error_types: Optional[List[str]] = None,
-        compute_rewards: bool = False
-    ):
-        """Initialize evaluator.
+    info["max_turns"] = max_steps
+    info["current_turn"] = 1
+    agent.update_from_env(obs, 0, False, info)
 
-        Args:
-            ground_truth_dir: Base directory containing ground truth files
-            scenario: Evaluation scenario (DETECTION or QUALITY)
-            review_dir: Directory containing review trajectory files
-            agent_type: Type of agent (e.g., 'evolving_draft')
-            model_name: Name of model (e.g., 'deepseek-reasoner')
-            judge_model: LLM judge model (default from judge_prompts.py)
-            error_types: List of error types for detection scenario
-            compute_rewards: Enable reward calculation (quality scenario only)
-        """
-        self.ground_truth_dir = ground_truth_dir
-        self.scenario = scenario
-        self.review_dir = review_dir
-        self.agent_type = agent_type
-        self.model_name = model_name
-        self.judge_model = judge_model or os.getenv("MODEL_NAME", DEFAULT_JUDGE_MODEL)
-        self.error_types = error_types or []
+    done = False
+    total_steps = 0
+    total_usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    trajectory: List[Dict] = []
 
-        # Infer error type from review directory if not already known
-        self.inferred_error_type = None
-        if self.scenario == EvaluationScenario.DETECTION and self.error_types:
-            self.inferred_error_type = _infer_error_type_from_path(review_dir, error_types)
+    for step_idx in range(max_steps):
+        response, usage = await _call_llm_with_retry(model, agent.chat_completions, temperature, max_tokens)
+        for k in total_usage:
+            total_usage[k] += usage[k]
 
-        self.ground_truth = self._load_ground_truth()
+        if response is None:
+            logger.warning("[%s] LLM call failed at step %d, stopping early", paper_id, step_idx + 1)
+            break
 
-        # Initialize reward calculator if requested
-        self.reward_calculator = None
-        if compute_rewards:
-            if not REWARDS_AVAILABLE:
-                warnings.warn("RewardCalculator not available. Install required dependencies.")
-            elif self.scenario != EvaluationScenario.QUALITY:
-                warnings.warn("Rewards only supported for quality scenario. Ignoring compute_rewards.")
-            else:
-                self.reward_calculator = RewardCalculator(judge_model=self.judge_model)
+        action = agent.update_from_model(response)
+        action_dict = action.action if hasattr(action, "action") else action
+        next_obs, reward, done, step_info = env.step(action_dict)
+        total_steps += 1
 
-    def _load_ground_truth(self) -> Dict[str, Dict]:
-        """Load ground truth files.
+        trajectory.append({
+            "step": total_steps,
+            "action": step_info.get("action_name", action_dict.get("name", "unknown")),
+            "llm_response": response,
+            "observation": next_obs.get("action_result", "")[:2000],
+            "memory_ops_results": list(agent._last_memory_results) if agent._last_memory_results else [],
+        })
 
-        Returns:
-            Dictionary mapping keys to ground truth data.
-            For detection: keys are '{paper_id}:{error_type}'
-            For quality: keys are paper IDs
-        """
-        ground_truth = {}
+        step_info["max_turns"] = max_steps
+        step_info["current_turn"] = step_idx + 2
+        agent.update_from_env(next_obs, reward, done, step_info)
 
-        if self.scenario == EvaluationScenario.DETECTION:
-            # Load from blueprint_{error_type}_picf/label/ structure
-            for error_type in self.error_types:
-                label_dir = os.path.join(
-                    self.ground_truth_dir,
-                    f"blueprint_{error_type}_picf",
-                    "label"
-                )
+        if done:
+            break
 
-                if not os.path.exists(label_dir):
-                    warnings.warn(f"Label directory not found: {label_dir}")
-                    continue
+    # Nudge the agent to finish if it hasn't already
+    if not done:
+        nudge_msg = (
+            "You have used all your research steps. You MUST now call the 'finish' action immediately. "
+            "Before finishing, add any remaining outline entries (summary, strengths, weaknesses, "
+            "questions, overall_score) based on what you have gathered so far. "
+            "Do NOT call read_section or search_paper again. Call 'finish' now."
+        )
+        agent._messages.append({"role": "user", "content": nudge_msg})
+        logger.info("[%s] Nudging agent to finish (%d extra steps)", paper_id, nudge_steps)
 
-                for filename in os.listdir(label_dir):
-                    if not filename.endswith('.json'):
-                        continue
+        for extra_idx in range(nudge_steps):
+            response, usage = await _call_llm_with_retry(model, agent.chat_completions, temperature, max_tokens)
+            for k in total_usage:
+                total_usage[k] += usage[k]
 
-                    filepath = os.path.join(label_dir, filename)
-                    try:
-                        with open(filepath, 'r', encoding='utf-8') as f:
-                            data = json.load(f)
-                        paper_id = filename.replace('.json', '')
-                        composite_key = f"{paper_id}:{error_type}"
-                        ground_truth[composite_key] = data
-                    except Exception as e:
-                        warnings.warn(f"Failed to load {filename} from {label_dir}: {e}")
+            if response is None:
+                break
+            action = agent.update_from_model(response)
+            action_dict = action.action if hasattr(action, "action") else action
+            next_obs, reward, done, step_info = env.step(action_dict)
+            total_steps += 1
 
-        else:  # QUALITY scenario
-            # Load from single directory
-            if not os.path.exists(self.ground_truth_dir):
-                warnings.warn(f"Ground truth directory not found: {self.ground_truth_dir}")
-                return ground_truth
+            trajectory.append({
+                "step": total_steps,
+                "action": step_info.get("action_name", action_dict.get("name", "unknown")),
+                "llm_response": response,
+                "observation": next_obs.get("action_result", "")[:2000],
+                "memory_ops_results": list(agent._last_memory_results) if agent._last_memory_results else [],
+                "nudge": True,
+            })
 
-            for filename in os.listdir(self.ground_truth_dir):
-                if not filename.endswith('.json'):
-                    continue
+            step_info["max_turns"] = max_steps + nudge_steps
+            step_info["current_turn"] = max_steps + extra_idx + 2
+            agent.update_from_env(next_obs, reward, done, step_info)
+            if done:
+                break
 
-                filepath = os.path.join(self.ground_truth_dir, filename)
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    paper_id = filename.replace('.json', '')
-                    ground_truth[paper_id] = data
-                except Exception as e:
-                    warnings.warn(f"Failed to load {filename}: {e}")
+    # Extract review
+    review = env._finished_review
+    if review is None:
+        logger.warning("[%s] No finish action; extracting review from agent log", paper_id)
+        review = agent.get_review_from_log()
 
-        return ground_truth
-
-    def _extract_review_from_trajectory(self, trajectory: List[Dict]) -> Optional[str]:
-        """Extract final review text from trajectory JSON.
-
-        Args:
-            trajectory: List of message dictionaries
-
-        Returns:
-            Review text or None if not found
-        """
-        # Strategy 1: Look for tool call with name='write_review'
-        for msg in reversed(trajectory):
-            if msg.get('role') == 'tool' and msg.get('name') == 'write_review':
-                content = msg.get('content', '')
-                if content and content != 'N/A':
-                    return content
-
-        # Strategy 2: Look for assistant message with 'sections' in tool_calls
-        for msg in reversed(trajectory):
-            if msg.get('role') == 'assistant':
-                tool_calls = msg.get('tool_calls', [])
-                if tool_calls:
-                    for tool_call in tool_calls:
-                        if isinstance(tool_call, dict):
-                            if tool_call.get('function', {}).get('name') == 'write_review':
-                                # Extract from arguments
-                                args = tool_call.get('function', {}).get('arguments', '')
-                                if isinstance(args, str):
-                                    try:
-                                        args = json.loads(args)
-                                    except:
-                                        pass
-                                if isinstance(args, dict):
-                                    return json.dumps(args.get('sections', args))
-
-        # Strategy 3: Look in content for review structure
-        for msg in reversed(trajectory):
-            if msg.get('role') == 'assistant':
-                content = msg.get('content', '')
-                if isinstance(content, str) and len(content) > 100:
-                    # Check if it looks like a review
-                    if any(keyword in content.lower() for keyword in ['summary', 'strengths', 'weaknesses', 'soundness']):
-                        return content
-
+    if review is None:
+        logger.warning("[%s] No review produced after %d steps", paper_id, total_steps)
         return None
 
-    def _call_detection_judge(self, review_text: str, ground_truth: Dict) -> Dict:
-        """Binary detection evaluation using LLM judge.
+    result = {
+        "paper_id": paper_id,
+        "summary": review.get("summary", ""),
+        "strengths": review.get("strengths", []),
+        "weaknesses": review.get("weaknesses", []),
+        "questions": review.get("questions", []),
+        "overall_score": review.get("overall_score"),
+        "n_steps": total_steps,
+        "token_usage": total_usage,
+        "trajectory": trajectory,
+    }
 
-        Args:
-            review_text: The review to evaluate
-            ground_truth: Ground truth containing error information
+    logger.info(
+        "[%s] done=%s steps=%d score=%s w=%d s=%d tokens=%d",
+        paper_id, done, total_steps, result.get("overall_score"),
+        len(result.get("weaknesses", [])), len(result.get("strengths", [])),
+        total_usage["total_tokens"],
+    )
+    return result
 
-        Returns:
-            Judge evaluation result
-        """
-        logic_gap = ground_truth.get("logic_gap_summary", "N/A")
 
-        # Escape curly braces in review_text to avoid format string conflicts
-        review_text_escaped = review_text.replace('{', '{{').replace('}', '}}')
+# ---------------------------------------------------------------------------
+# Scoring
+# ---------------------------------------------------------------------------
 
-        prompt = DETECTION_JUDGE_USER_PROMPT.format(
-            logic_gap=logic_gap,
-            review_text=review_text_escaped
-        )
+async def score_reviews(
+    reviews_dir: str,
+    triplets_dir: str,
+    output_dir: str,
+    reward_modes: Set[str],
+    judge_model: str = "revutil",
+    rubric_model: Optional[str] = None,
+    concurrency: int = 8,
+    max_samples: Optional[int] = None,
+) -> List[Dict]:
+    """Score pre-generated review JSONs using async_score_review.
 
-        try:
-            response = call_llm(
-                model=self.judge_model,
-                messages=[
-                    {"role": "system", "content": DETECTION_JUDGE_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.0
+    Reads review JSONs from *reviews_dir* (each with at least summary,
+    strengths, weaknesses, questions, overall_score), joins with triplets
+    from *triplets_dir* for ground-truth signals, and writes per-review
+    scored results to ``<output_dir>/papers/<paper_id>.json``.
+
+    Args:
+        reviews_dir: directory of review JSON files
+        triplets_dir: directory of paper triplet JSONs (ground truth)
+        output_dir: output directory for scored results
+        reward_modes: set of reward modes (e.g. {"format", "rubric", "score_diff"})
+        judge_model: model for rubric scoring
+        rubric_model: model for rubric evaluation (defaults to judge_model)
+        concurrency: number of concurrent scoring tasks
+        max_samples: limit number of reviews to score
+
+    Returns:
+        List of per-review scored result dicts.
+    """
+    from reviewer.reward.score_review import async_score_review
+
+    out = Path(output_dir)
+    papers_dir = out / "papers"
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load reviews
+    review_files = sorted(f for f in os.listdir(reviews_dir) if f.endswith(".json"))
+    if max_samples is not None:
+        review_files = review_files[:max_samples]
+
+    items: List[Dict] = []
+    for fname in review_files:
+        with open(os.path.join(reviews_dir, fname)) as f:
+            review_data = json.load(f)
+
+        paper_id = review_data.get("paper_id", fname.replace(".json", ""))
+        base_id = re.sub(r"_r\d+$", "", paper_id)
+
+        # Load triplet for ground truth
+        triplet_path = os.path.join(triplets_dir, f"{base_id}.json")
+        human_avg_score = None
+        paper_content: Optional[str] = None
+
+        if os.path.exists(triplet_path):
+            with open(triplet_path) as f:
+                triplet = json.load(f)
+            human_avg_score = float(triplet.get("scores", {}).get("rating_avg", 0) or 0)
+            paper_content = triplet.get("markdown", {}).get("content")
+            title = triplet.get("title", "")
+            if paper_content and title and not paper_content.startswith(f"# {title}"):
+                paper_content = f"# {title}\n\n{paper_content}"
+        else:
+            logger.warning("[%s] triplet not found at %s", paper_id, triplet_path)
+
+        # Build review object
+        review_obj = {
+            "summary": review_data.get("summary", ""),
+            "strengths": review_data.get("strengths", []),
+            "weaknesses": review_data.get("weaknesses", []),
+            "questions": review_data.get("questions", []),
+            "overall_score": review_data.get("overall_score"),
+        }
+
+        items.append({
+            "paper_id": paper_id,
+            "review": review_obj,
+            "human_avg_score": human_avg_score,
+            "paper_content": paper_content,
+        })
+
+    logger.info("Loaded %d reviews from '%s'", len(items), reviews_dir)
+
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def score_one(item: Dict) -> Dict:
+        pid = item["paper_id"]
+        paper_file = papers_dir / f"{pid}.json"
+
+        if paper_file.exists():
+            logger.info("[%s] skipping (already scored)", pid)
+            with open(paper_file) as f:
+                return json.load(f)
+
+        review = item["review"]
+        if not review.get("summary") and not review.get("strengths") and not review.get("weaknesses"):
+            failed = {"paper_id": pid, "has_review": False, "error": "Empty review"}
+            with open(paper_file, "w") as f:
+                json.dump(failed, f, indent=2, default=str)
+            return failed
+
+        async with semaphore:
+            result = await async_score_review(
+                review=review,
+                human_avg_score=item.get("human_avg_score"),
+                reward_modes=reward_modes,
+                judge_model=judge_model,
+                paper_content=item.get("paper_content"),
+                rubric_model=rubric_model,
             )
 
-            content = get_content(response).strip()
+        # Remap keys to standard names
+        scored = {
+            "paper_id": pid,
+            "has_review": True,
+            "format_reward": result.pop("format", None),
+            "score_diff_reward": result.pop("score_diff", None),
+            "rubric_reward": result.pop("rubric", None),
+            "rubric_scores": result.pop("rubric_scores", None),
+            **result,
+        }
 
-            # Parse JSON response - handle markdown code blocks
-            if "```json" in content:
-                # Extract content between ```json and ```
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                content = content[start:end].strip()
-            elif content.startswith("```"):
-                # Handle generic code block
-                lines = content.split('\n')
-                # Remove first and last lines (the ``` markers)
-                content = '\n'.join(lines[1:-1]).strip()
+        with open(paper_file, "w") as f:
+            json.dump(scored, f, indent=2, default=str)
 
-            result = json.loads(content)
-
-            # Normalize boolean
-            if isinstance(result.get('detected'), str):
-                result['detected'] = result['detected'].lower() in ['true', 'yes']
-
-            return result
-
-        except json.JSONDecodeError as e:
-            warnings.warn(f"Failed to parse judge response: {e}\nContent preview: {content[:500]}")
-            return {
-                "detected": False,
-                "evidence_from_review": "N/A",
-                "reasoning": f"Parse error: {str(e)}"
-            }
-        except Exception as e:
-            warnings.warn(f"Error calling detection judge: {e}")
-            return {
-                "detected": False,
-                "evidence_from_review": "N/A",
-                "reasoning": f"Error: {str(e)}"
-            }
-
-    def _call_quality_judge(self, review_text: str, paper_info: Dict) -> Dict:
-        """Quality evaluation using LLM judge.
-
-        Args:
-            review_text: The review to evaluate
-            paper_info: Paper information (title, abstract)
-
-        Returns:
-            Judge evaluation result with dimension scores
-        """
-        # Escape curly braces in review_text to avoid format string conflicts
-        review_text_escaped = review_text.replace('{', '{{').replace('}', '}}')
-
-        prompt = QUALITY_JUDGE_USER_PROMPT.format(
-            paper_title=paper_info.get('title', 'N/A'),
-            paper_abstract=paper_info.get('abstract', paper_info.get('summary', 'N/A')),
-            review_text=review_text_escaped
+        scores_str = " ".join(
+            f"{k}={v:.4f}" for k, v in scored.items()
+            if isinstance(v, (int, float)) and k != "has_review"
         )
+        logger.info("[%s]: %s", pid, scores_str)
+        return scored
 
-        try:
-            response = call_llm(
-                model=self.judge_model,
-                messages=[
-                    {"role": "system", "content": QUALITY_JUDGE_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.0
-            )
+    # Group by base paper for prefix-cache locality
+    paper_groups: Dict[str, List[Dict]] = {}
+    for item in items:
+        base_id = re.sub(r"_r\d+$", "", item["paper_id"])
+        paper_groups.setdefault(base_id, []).append(item)
 
-            content = get_content(response).strip()
+    async def score_group(group: List[Dict]) -> List[Dict]:
+        return [await score_one(item) for item in group]
 
-            # Parse JSON response - handle markdown code blocks
-            if "```json" in content:
-                # Extract content between ```json and ```
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                content = content[start:end].strip()
-            elif content.startswith("```"):
-                # Handle generic code block
-                lines = content.split('\n')
-                # Remove first and last lines (the ``` markers)
-                content = '\n'.join(lines[1:-1]).strip()
+    group_results = await asyncio.gather(*[score_group(g) for g in paper_groups.values()])
+    all_results = [r for group in group_results for r in group]
 
-            result = json.loads(content)
+    # Write summary
+    summary = _compute_summary(all_results)
+    summary_file = out / "score_summary.json"
+    with open(summary_file, "w") as f:
+        json.dump(summary, f, indent=2, default=str)
 
-            # Ensure all dimensions are present
-            dimensions = ['comprehensiveness', 'specificity', 'constructiveness',
-                         'accuracy', 'structure', 'overall']
-            for dim in dimensions:
-                if dim not in result:
-                    result[dim] = 3  # Default to middle value
+    logger.info("Scored %d reviews. Summary: %s", len(all_results), summary_file)
+    return all_results
 
-            return result
 
-        except json.JSONDecodeError as e:
-            warnings.warn(f"Failed to parse judge response: {e}")
-            return {
-                'comprehensiveness': 3,
-                'specificity': 3,
-                'constructiveness': 3,
-                'accuracy': 3,
-                'structure': 3,
-                'overall': 3,
-                'reasoning': f"Parse error: {str(e)}"
-            }
-        except Exception as e:
-            warnings.warn(f"Error calling quality judge: {e}")
-            return {
-                'comprehensiveness': 3,
-                'specificity': 3,
-                'constructiveness': 3,
-                'accuracy': 3,
-                'structure': 3,
-                'overall': 3,
-                'reasoning': f"Error: {str(e)}"
-            }
+def _compute_summary(results: List[Dict]) -> Dict:
+    """Compute aggregate mean/std for standard reward metrics."""
+    completed = [r for r in results if r.get("has_review")]
+    metrics = ["format_reward", "score_diff_reward", "rubric_reward"]
+    summary: Dict[str, Any] = {
+        "total": len(results),
+        "completed": len(completed),
+    }
+    for key in metrics:
+        vals = [r[key] for r in completed if r.get(key) is not None]
+        if vals:
+            mean = sum(vals) / len(vals)
+            std = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5 if len(vals) > 1 else 0.0
+            summary[key] = {"mean": round(mean, 4), "std": round(std, 4), "count": len(vals)}
+    return summary
 
-    def evaluate(self) -> Dict:
-        """Evaluate all reviews in the specified directory.
 
-        Returns:
-            Dictionary with metadata, aggregate metrics, and per-paper results
-        """
-        results = []
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
-        if not os.path.exists(self.review_dir):
-            warnings.warn(f"Review directory not found: {self.review_dir}")
-            return self._create_output({})
+def _setup_logging(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(output_dir / f"eval_{timestamp}.log"),
+            logging.StreamHandler(),
+        ],
+    )
 
-        review_files = [
-            f for f in os.listdir(self.review_dir)
-            if f.endswith('_trajectory.json')
-        ]
 
-        if not review_files:
-            warnings.warn(f"No trajectory files found in {self.review_dir}")
-            return self._create_output({})
+async def _cli_infer(args) -> None:
+    """CLI handler for --mode infer."""
+    output_dir = Path(args.output_dir)
+    _setup_logging(output_dir)
 
-        for review_file in tqdm(review_files, desc=f"Evaluating {self.agent_type}/{self.model_name}"):
-            try:
-                # Load trajectory
-                filepath = os.path.join(self.review_dir, review_file)
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    trajectory = json.load(f)
+    papers = load_test_data(args.test_data, max_samples=args.max_samples)
+    sem = asyncio.Semaphore(args.concurrency)
 
-                # Extract review text
-                review_text = self._extract_review_from_trajectory(trajectory)
-                if not review_text:
-                    warnings.warn(f"Could not extract review from {review_file}")
-                    continue
-
-                # Extract paper ID and error type from filename
-                # Expected format: {paper_id}_{error_type}_trajectory.json
-                # or legacy format: {paper_id}_trajectory.json
-                filename_without_suffix = review_file.replace('_trajectory.json', '')
-
-                # Try to split by underscore to get error type
-                parts = filename_without_suffix.rsplit('_', 1)
-                if len(parts) == 2 and parts[1] in self.error_types:
-                    # New format: paper_id_errortype
-                    paper_id = parts[0]
-                    error_type_from_filename = parts[1]
-                else:
-                    # Legacy format: just paper_id
-                    paper_id = filename_without_suffix
-                    error_type_from_filename = None
-
-                # Find ground truth
-                ground_truth = None
-                error_type_used = None
-
-                if self.scenario == EvaluationScenario.DETECTION:
-                    # Priority 1: Use error type from filename
-                    if error_type_from_filename:
-                        composite_key = f"{paper_id}:{error_type_from_filename}"
-                        ground_truth = self.ground_truth.get(composite_key)
-                        error_type_used = error_type_from_filename
-
-                    # Priority 2: Try inferred error type from directory path
-                    if ground_truth is None and self.inferred_error_type:
-                        composite_key = f"{paper_id}:{self.inferred_error_type}"
-                        ground_truth = self.ground_truth.get(composite_key)
-                        error_type_used = self.inferred_error_type
-
-                    # Priority 3: Try all error types
-                    if ground_truth is None:
-                        for error_type in self.error_types:
-                            composite_key = f"{paper_id}:{error_type}"
-                            if composite_key in self.ground_truth:
-                                ground_truth = self.ground_truth[composite_key]
-                                error_type_used = error_type
-                                break
-                else:  # QUALITY
-                    ground_truth = self.ground_truth.get(paper_id)
-
-                if ground_truth is None:
-                    warnings.warn(f"No ground truth found for {paper_id}")
-                    continue
-
-                # Call appropriate judge
-                if self.scenario == EvaluationScenario.DETECTION:
-                    result = self._call_detection_judge(review_text, ground_truth)
-                    result['paper_id'] = paper_id
-                    result['error_type'] = error_type_used
-                else:
-                    result = self._call_quality_judge(review_text, ground_truth)
-                    result['paper_id'] = paper_id
-
-                    # Compute rewards if enabled
-                    if self.reward_calculator:
-                        try:
-                            # Prepare paper context
-                            paper_context = {
-                                'title': ground_truth.get('title', 'N/A'),
-                                'abstract': ground_truth.get('abstract', ground_truth.get('summary', 'N/A'))
-                            }
-
-                            # Get human reviews (may be in different formats)
-                            human_reviews = ground_truth.get('reviews', [])
-                            if not human_reviews:
-                                # Single review in ground_truth itself
-                                human_reviews = [ground_truth]
-
-                            # Compute reward
-                            reward_result = self.reward_calculator.compute_reward(
-                                generated_review=review_text,
-                                human_reviews=human_reviews,
-                                paper_context=paper_context
-                            )
-
-                            # Add reward scores to result
-                            result['rewards'] = reward_result.to_dict()
-                        except Exception as e:
-                            warnings.warn(f"Error computing rewards for {paper_id}: {e}")
-                            result['rewards'] = {'error': str(e)}
-
-                results.append(result)
-
-            except Exception as e:
-                import traceback
-                warnings.warn(f"Error processing {review_file}: {e}\n{traceback.format_exc()}")
+    async def process(paper: Dict) -> None:
+        paper_id = paper["paper_id"]
+        for run_idx in range(1, args.n_runs + 1):
+            out_path = output_dir / f"{paper_id}_r{run_idx}.json"
+            if out_path.exists():
+                logger.info("[skip] %s_r%d (exists)", paper_id, run_idx)
                 continue
 
-        return self._create_output(results)
+            async with sem:
+                result = await run_inference(
+                    paper, args.model,
+                    max_steps=args.max_steps,
+                    nudge_steps=args.nudge_steps,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                )
 
-    def _compute_detection_metrics(self, results: List[Dict]) -> Dict:
-        """Compute detection accuracy metrics.
+            if result is None:
+                logger.error("[error] %s_r%d failed", paper_id, run_idx)
+                continue
 
-        Args:
-            results: List of detection evaluation results
+            with open(out_path, "w") as f:
+                json.dump(result, f, indent=2)
 
-        Returns:
-            Detection metrics dictionary
-        """
-        if not results:
-            return {
-                'accuracy': 0.0,
-                'total_papers': 0,
-                'detected_count': 0
-            }
+    await asyncio.gather(*[process(p) for p in papers])
+    print(f"\nReviews saved to: {output_dir}")
 
-        total = len(results)
-        detected = sum(1 for r in results if r.get('detected', False))
 
-        return {
-            'accuracy': detected / total if total > 0 else 0.0,
-            'total_papers': total,
-            'detected_count': detected
-        }
+async def _cli_score(args) -> None:
+    """CLI handler for --mode score."""
+    output_dir = Path(args.output_dir)
+    _setup_logging(output_dir)
 
-    def _compute_quality_metrics(self, results: List[Dict]) -> Dict:
-        """Compute mean and std for quality dimensions.
+    modes = _parse_reward_modes(args.reward_mode)
+    results = await score_reviews(
+        reviews_dir=args.reviews_dir,
+        triplets_dir=args.triplets_dir,
+        output_dir=args.output_dir,
+        reward_modes=modes,
+        judge_model=args.judge_model,
+        rubric_model=args.rubric_model,
+        concurrency=args.concurrency,
+        max_samples=args.max_samples,
+    )
+    _print_summary(results)
 
-        Args:
-            results: List of quality evaluation results
 
-        Returns:
-            Quality metrics dictionary
-        """
-        if not results:
-            return {
-                'total_papers': 0
-            }
+async def _cli_run(args) -> None:
+    """CLI handler for --mode run (infer + score)."""
+    # Infer first
+    await _cli_infer(args)
 
-        dimensions = ['comprehensiveness', 'specificity', 'constructiveness',
-                     'accuracy', 'structure', 'overall']
+    # Then score
+    args.reviews_dir = args.output_dir
+    args.triplets_dir = args.test_data
+    eval_dir = str(Path(args.output_dir).parent / (Path(args.output_dir).name + "_eval"))
+    args.output_dir = eval_dir
+    await _cli_score(args)
 
-        metrics = {'total_papers': len(results)}
 
-        for dim in dimensions:
-            scores = [r.get(dim, 3) for r in results]
-            metrics[f'{dim}_mean'] = float(np.mean(scores))
-            metrics[f'{dim}_std'] = float(np.std(scores))
+def _parse_reward_modes(reward_mode_str: str) -> Set[str]:
+    FULL_MODES = {"format", "score_diff", "rubric"}
+    if reward_mode_str == "full":
+        return FULL_MODES
+    modes = set(reward_mode_str.split(","))
+    invalid = modes - FULL_MODES
+    if invalid:
+        raise ValueError(f"Invalid reward modes: {invalid}")
+    return modes
 
-        # Compute reward metrics if available
-        results_with_rewards = [r for r in results if 'rewards' in r and 'error' not in r.get('rewards', {})]
-        if results_with_rewards:
-            reward_components = ['total_reward', 'recall_reward', 'format_reward',
-                               'actionable_reward', 'grounded_reward', 'score_difference_reward']
 
-            metrics['total_papers_with_rewards'] = len(results_with_rewards)
-
-            for comp in reward_components:
-                scores = [r['rewards'].get(comp, 0.0) for r in results_with_rewards]
-                metrics[f'{comp}_mean'] = float(np.mean(scores))
-                metrics[f'{comp}_std'] = float(np.std(scores))
-
-        return metrics
-
-    def _create_output(self, results: List[Dict]) -> Dict:
-        """Create output JSON structure.
-
-        Args:
-            results: List of per-paper results
-
-        Returns:
-            Complete output dictionary
-        """
-        # Compute aggregate metrics
-        if self.scenario == EvaluationScenario.DETECTION:
-            aggregate_metrics = self._compute_detection_metrics(results)
-        else:
-            aggregate_metrics = self._compute_quality_metrics(results)
-
-        # Create output structure
-        output = {
-            "metadata": {
-                "scenario": self.scenario.value,
-                "agent_type": self.agent_type,
-                "model": self.model_name,
-                "review_dir": self.review_dir,
-                "timestamp": datetime.now().isoformat(),
-                "judge_model": self.judge_model
-            },
-            "aggregate_metrics": aggregate_metrics,
-            "per_paper_results": results
-        }
-
-        # Add scenario-specific metadata
-        if self.scenario == EvaluationScenario.DETECTION:
-            output["metadata"]["error_types"] = self.error_types
-            output["metadata"]["inferred_error_type"] = self.inferred_error_type
-
-        return output
+def _print_summary(results: List[Dict]) -> None:
+    completed = [r for r in results if r.get("has_review")]
+    print(f"\nScored {len(completed)}/{len(results)} reviews")
+    metrics = ["format_reward", "score_diff_reward", "rubric_reward"]
+    for key in metrics:
+        vals = [r[key] for r in completed if r.get(key) is not None]
+        if vals:
+            mean = sum(vals) / len(vals)
+            print(f"  {key}: {mean:.4f} (n={len(vals)})")
 
 
 def main():
-    """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Evaluate review agent performance",
+        description="Reviewer-R1 inference and evaluation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Detection scenario
-  # Note: Trajectory files should be named {paper_id}_{error_type}_trajectory.json
-  # e.g., 2023.acl%2023.acl-long.124_conclusion_trajectory.json
-  python -m reviewer.evaluation \\
-    --scenario detection \\
-    --ground-truth-dir datasets/counter-review \\
-    --error-types conclusion finding result \\
-    --review-dir results/evolving_draft/deepseek-reasoner \\
-    --agent-type evolving_draft \\
-    --model-name deepseek-reasoner \\
-    --output results/detection_results.json
+    )
+    parser.add_argument("--mode", choices=["infer", "score", "run"], required=True,
+                        help="infer: generate reviews; score: score existing reviews; run: both")
 
-  # Quality scenario
-  python -m reviewer.evaluation \\
-    --scenario quality \\
-    --ground-truth-dir datasets/quality-papers \\
-    --review-dir results/evolving_draft/deepseek-reasoner \\
-    --agent-type evolving_draft \\
-    --model-name deepseek-reasoner \\
-    --output results/quality_results.json
-        """
-    )
+    # Inference args
+    parser.add_argument("--model", type=str, help="LLM model identifier (required for infer/run)")
+    parser.add_argument("--test_data", type=str, default="data/test_data",
+                        help="Directory with test paper triplets")
+    parser.add_argument("--max_steps", type=int, default=25, help="Max agent steps per review")
+    parser.add_argument("--nudge_steps", type=int, default=5, help="Extra steps after nudge")
+    parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    parser.add_argument("--max_tokens", type=int, default=4096, help="Max tokens per LLM response")
+    parser.add_argument("--n_runs", type=int, default=4, help="Number of reviews per paper")
 
-    # Required arguments
-    parser.add_argument(
-        '--scenario',
-        choices=['detection', 'quality'],
-        required=True,
-        help='Evaluation scenario: detection or quality'
-    )
-    parser.add_argument(
-        '--ground-truth-dir',
-        required=True,
-        help='Base directory containing ground truth files'
-    )
-    parser.add_argument(
-        '--review-dir',
-        required=True,
-        help='Directory containing review trajectory files'
-    )
-    parser.add_argument(
-        '--agent-type',
-        required=True,
-        help='Agent type (e.g., evolving_draft)'
-    )
-    parser.add_argument(
-        '--model-name',
-        required=True,
-        help='Model name (e.g., deepseek-reasoner)'
-    )
-    parser.add_argument(
-        '--output',
-        required=True,
-        help='Output JSON file path'
-    )
-
-    # Optional arguments
-    parser.add_argument(
-        '--error-types',
-        nargs='+',
-        help='Error types for detection scenario (e.g., conclusion finding result)'
-    )
-    parser.add_argument(
-        '--judge-model',
-        help='LLM judge model (default from judge_prompts.py or MODEL_NAME env var)'
-    )
-    parser.add_argument(
-        '--compute-rewards',
-        action='store_true',
-        help='Compute reward scores (quality scenario only)'
-    )
+    # Scoring args
+    parser.add_argument("--reviews_dir", type=str, help="Directory of review JSONs (for score mode)")
+    parser.add_argument("--triplets_dir", type=str, default="data/test_data",
+                        help="Directory with paper triplet JSONs (ground truth)")
+    parser.add_argument("--reward_mode", type=str, default="rubric,format,score_diff",
+                        help="Comma-separated reward modes or 'full'")
+    parser.add_argument("--judge_model", type=str, default="revutil")
+    parser.add_argument("--rubric_model", type=str, default=None)
+    # Common args
+    parser.add_argument("--output_dir", type=str, default="outputs/eval", help="Output directory")
+    parser.add_argument("--max_samples", type=int, default=None, help="Limit number of papers/reviews")
+    parser.add_argument("--concurrency", type=int, default=4, help="Concurrent tasks")
 
     args = parser.parse_args()
 
-    # Validate detection scenario requirements
-    if args.scenario == 'detection' and not args.error_types:
-        parser.error("--error-types is required for detection scenario")
+    # Validate
+    if args.mode in ("infer", "run") and not args.model:
+        parser.error("--model is required for infer/run mode")
+    if args.mode == "score" and not args.reviews_dir:
+        parser.error("--reviews_dir is required for score mode")
 
-    # Determine scenario
-    scenario = (
-        EvaluationScenario.DETECTION
-        if args.scenario == 'detection'
-        else EvaluationScenario.QUALITY
-    )
-
-    # Print header
-    print("=" * 80)
-    print("REVIEW AGENT EVALUATION")
-    print("=" * 80)
-    print(f"\nScenario: {scenario.value}")
-    print(f"Agent: {args.agent_type}")
-    print(f"Model: {args.model_name}")
-    print(f"Review directory: {args.review_dir}")
-    print(f"Ground truth: {args.ground_truth_dir}")
-    if args.error_types:
-        print(f"Error types: {', '.join(args.error_types)}")
-    if args.judge_model:
-        print(f"Judge model: {args.judge_model}")
-
-    # Initialize evaluator
-    evaluator = ReviewEvaluator(
-        ground_truth_dir=args.ground_truth_dir,
-        scenario=scenario,
-        review_dir=args.review_dir,
-        agent_type=args.agent_type,
-        model_name=args.model_name,
-        judge_model=args.judge_model,
-        error_types=args.error_types,
-        compute_rewards=args.compute_rewards
-    )
-
-    print(f"\nLoaded {len(evaluator.ground_truth)} ground truth files")
-
-    # Run evaluation
-    print(f"\nEvaluating...")
-    results = evaluator.evaluate()
-
-    # Save results
-    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else '.', exist_ok=True)
-    with open(args.output, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-
-    # Print summary
-    print("\n" + "=" * 80)
-    print(f"{scenario.value.upper()} EVALUATION RESULTS")
-    print("=" * 80)
-    print("\nAggregate Metrics:")
-    for key, value in results['aggregate_metrics'].items():
-        if isinstance(value, float):
-            print(f"  {key}: {value:.4f}")
-        else:
-            print(f"  {key}: {value}")
-
-    print(f"\nDetailed results saved to: {args.output}")
-    print("\nEvaluation complete!")
+    if args.mode == "infer":
+        asyncio.run(_cli_infer(args))
+    elif args.mode == "score":
+        asyncio.run(_cli_score(args))
+    else:
+        asyncio.run(_cli_run(args))
 
 
 if __name__ == "__main__":

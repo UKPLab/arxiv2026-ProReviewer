@@ -22,13 +22,12 @@ import hydra
 from omegaconf import DictConfig
 import logging
 
-from reviewer.rllm_version.review_agent import ReviewAgent
-from reviewer.rllm_version.review_env import ReviewEnv
-from reviewer.core.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
-from reviewer.reward.calculator import RewardCalculator
+from reviewer.core.proreviewer import ProReviewer as ReviewAgent
+from reviewer.core.review_env import ReviewEnv
+from reviewer.core.review_workflow import ReviewWorkflow
+from reviewer.prompts.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
 from rllm.data.dataset import DatasetRegistry
 from rllm.trainer import AgentTrainer
-from reviewer.rllm_version.review_workflow import ReviewWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -77,21 +76,13 @@ def main(config: DictConfig):
     # Configure environment (static args shared across all episodes)
     env_args = {
         "reward_mode": reward_mode,
-        "enable_shaping_rewards": config.get("reviewer", {}).get("enable_shaping_rewards", False),
-        "max_research_iterations": config.get("reviewer", {}).get("max_research_iterations", 20),
         "format_penalty": config.get("reviewer", {}).get("format_penalty", config.get("reviewer", {}).get("incomplete_penalty", 0.0)),
         "reward_weights": dict(config.get("reviewer", {}).get("reward_weights", {})) if config.get("reviewer", {}).get("reward_weights") else None,
         "judge_model": config.get("reviewer", {}).get("judge_model", None),
-        "recall_model": config.get("reviewer", {}).get("recall_model", "qwen35-122b"),
         "min_finish_sections": config.get("reviewer", {}).get("min_finish_sections", 5),
-        "memory_reasoning_mode": config.get("reviewer", {}).get("memory_reasoning_mode", "trajectory"),
         "duplicate_detection": config.get("reviewer", {}).get("duplicate_detection", False),
         "silent_duplicates": config.get("reviewer", {}).get("silent_duplicates", False),
     }
-
-    # Add research model only if not in direct mode
-    if not use_direct_mode:
-        env_args["research_model"] = config.get("reviewer", {}).get("research_model", "gpt-4o-mini")
 
     # Create trainer using MultiTurnWorkflow with stepwise advantage broadcasting.
     # Each step becomes an independent training example. The terminal reward's
@@ -104,12 +95,7 @@ def main(config: DictConfig):
             "env_cls": ReviewEnv,
             "agent_args": agent_args,
             "env_args": env_args,
-            "credit_assignment": config.get("reviewer", {}).get("credit_assignment", "broadcast"),
             "broadcast_decay": config.get("reviewer", {}).get("broadcast_decay", 0.0),
-            "recall_model": config.get("reviewer", {}).get("recall_model", "qwen35-122b"),
-            "credit_status_update_steps": config.get("reviewer", {}).get("credit_status_update_steps", False),
-            "credit_multiple_matched_ids": config.get("reviewer", {}).get("credit_multiple_matched_ids", True),
-            "quality_bonus": config.get("reviewer", {}).get("quality_bonus", False),
         },
         train_dataset=train_dataset,
         val_dataset=val_dataset,

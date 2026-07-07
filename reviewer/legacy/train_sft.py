@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from reviewer.core.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
+from reviewer.prompts.reviewer_prompts_direct import REVIEWER_DIRECT_SYSTEM_PROMPT
 
 
 def _has_empty_review_sections(messages: list[dict]) -> bool:

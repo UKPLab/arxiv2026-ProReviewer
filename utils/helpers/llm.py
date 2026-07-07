@@ -347,9 +347,10 @@ def call_llm(
         # Model is a direct model string (e.g., "openai/gpt-4", "/path/to/model")
         actual_model = model
     
-    # Check if this is a local model (file system path)
-    is_local = _is_local_model(actual_model)
-    
+    # Check if config specifies a remote server (base_url takes priority over local loading)
+    base_url = config.get("base_url") if config else None
+    is_local = _is_local_model(actual_model) if not base_url else False
+
     # Route to appropriate backend
     if is_local:
         return _call_vllm(
@@ -362,8 +363,6 @@ def call_llm(
             **kwargs
         )
     else:
-        # Check if this is a custom vLLM server (has base_url) - use openai client directly
-        base_url = config.get("base_url") if config else None
         if base_url:
             api_key = config.get("api_key", "EMPTY")
             lora_module = config.get("lora_module")
@@ -530,8 +529,9 @@ async def acall_llm(
         # Model is a direct model string
         actual_model = model
 
-    # Check if this is a local model (file system path)
-    is_local = _is_local_model(actual_model)
+    # Check if config specifies a remote server (base_url takes priority over local loading)
+    base_url = config.get("base_url") if config else None
+    is_local = _is_local_model(actual_model) if not base_url else False
 
     # Route to appropriate backend
     if is_local:
@@ -550,8 +550,6 @@ async def acall_llm(
             )
         )
     else:
-        # Check if this is a custom vLLM server (has base_url) - use openai client directly
-        base_url = config.get("base_url") if config else None
         if base_url:
             api_key = config.get("api_key", "EMPTY")
             lora_module = config.get("lora_module")

@@ -13,7 +13,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 
 from reviewer.core.reviewer_memory import ReviewLog
-from reviewer.core.reviewer_prompts_direct import (
+from reviewer.prompts.reviewer_prompts_direct import (
     REVIEWER_RECONSTRUCTION_SYSTEM_PROMPT,
 )
 from reviewer.rllm_version.review_agent import ReviewAgent
