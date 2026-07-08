@@ -53,7 +53,7 @@ def _has_empty_review_sections(messages: list[dict]) -> bool:
     return False
 
 
-def decompose_trace_to_mdp_steps(messages: list[dict], memory_in_first_message: bool = False) -> list[dict]:
+def decompose_trace_to_mdp_steps(messages: list[dict]) -> list[dict]:
     """Decompose a full multi-turn trace into MDP-style per-step examples.
 
     Mirrors the sliding window used during RL inference (ReviewAgent.update_from_env):
@@ -86,37 +86,21 @@ def decompose_trace_to_mdp_steps(messages: list[dict], memory_in_first_message: 
         obs_idx = 2 * k + 1      # observation for this step
         asst_idx = 2 * k + 2     # assistant response for this step
 
-
         if asst_idx >= len(messages):
             break
         if messages[asst_idx]["role"] != "assistant":
             break
-        if memory_in_first_message:
-            review_log = ""
-            if "<current_log_state>\n===" in messages[obs_idx]["content"]:
-                try:
-                    review_log = messages[obs_idx]["content"].split("<current_log_state>\n=== Complete Review Log ===")[1].split("</current_log_state>")[0].strip()
-                except Exception as e:
-                    print(messages[obs_idx]["content"])
-                    exit(1)
-
-            first_step_content = initial_obs["content"] + f"\n\nYour current review log is:\n<current_log_state>\n{review_log}\n</current_log_state> \n\n[Turn {k}/30]"
-            first_step_msg = {"role": "user", "content": first_step_content}
-
-            # update the observation to only include the new content (strip the log context)
-            observation = messages[obs_idx]["content"].split("<current_log_state>\n=== Complete Review Log ===")[0].strip()
-            messages[obs_idx]["content"] = "The message above is your previous response. Below is the environment's feedback from your last action.\n\n" + observation
 
         steps.append({
             "messages": [
                 system_msg,
-                first_step_msg if memory_in_first_message else initial_obs,
+                initial_obs,
                 messages[prev_asst_idx],  # last assistant
                 messages[obs_idx],         # current observation
                 messages[asst_idx],        # target assistant response
             ]
         })
-        
+
         k += 1
 
     return steps

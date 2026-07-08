@@ -67,7 +67,6 @@ def main(config: DictConfig):
     agent_args = {
         "accumulate_log_context": config.get("reviewer", {}).get("accumulate_log_context", True),
         "max_claims_in_context": config.get("reviewer", {}).get("max_claims_in_context", 10),
-        "memory_in_first_message": config.get("reviewer", {}).get("memory_in_first_message", False),
     }
 
     if use_direct_mode:

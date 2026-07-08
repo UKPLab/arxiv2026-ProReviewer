@@ -36,7 +36,6 @@ class ProReviewer(BaseAgent):
         accumulate_log_context: bool = True,
         max_claims_in_context: int = 10,
         system_prompt: Optional[str] = None,
-        memory_in_first_message: bool = False,
     ):
         """Initialize the review agent.
 
@@ -44,14 +43,10 @@ class ProReviewer(BaseAgent):
             accumulate_log_context: Whether to include log context in messages
             max_claims_in_context: Maximum claims to show in log context
             system_prompt: Custom system prompt (defaults to REVIEWER_DIRECT_SYSTEM_PROMPT)
-            memory_in_first_message: If True, place memory/log state in the first
-                user message (after paper info) instead of in each observation.
-                This separates "what you know" from "what just happened".
         """
         self.accumulate_log_context = accumulate_log_context
         self.max_claims_in_context = max_claims_in_context
         self._system_prompt = system_prompt or REVIEWER_DIRECT_SYSTEM_PROMPT
-        self.memory_in_first_message = memory_in_first_message
         self.logger = logging.getLogger(self.__class__.__name__)
 
         # Internal state
@@ -75,7 +70,6 @@ class ProReviewer(BaseAgent):
         self._last_llm_response = None
         self._last_action = None
         self._last_memory_results = []
-        self._paper_intro = ""  # cached for memory_in_first_message mode
 
     def update_from_env(
         self,
@@ -104,8 +98,7 @@ class ProReviewer(BaseAgent):
             title = observation["title"]
             sections = observation.get("sections", [])
 
-            self._paper_intro = f"The paper you are reviewing is titled '{title}' and it has the following sections: {', '.join(sections)}."
-            obs_content = self._paper_intro
+            obs_content = f"The paper you are reviewing is titled '{title}' and it has the following sections: {', '.join(sections)}."
 
             # Show turn budget from the very first turn
             max_turns = info.get("max_turns")
@@ -117,17 +110,7 @@ class ProReviewer(BaseAgent):
 
         else:
             # Build observation content for subsequent calls
-            if self.memory_in_first_message:
-                # In this mode, memory lives in msg[1]. The observation only
-                # carries the result of the previous action. Frame the sliding
-                # window so the model knows the assistant message above is its
-                # own last response.
-                obs_content = (
-                    "The message above is your previous response. "
-                    "Below is the environment's feedback from your last action.\n\n"
-                )
-            else:
-                obs_content = "The observation for this step is:\n"
+            obs_content = "The observation for this step is:\n"
 
             # Add memory operation results if any
             if self._last_memory_results:
@@ -138,8 +121,8 @@ class ProReviewer(BaseAgent):
             if action_result:
                 obs_content += f"<action_result>\n{action_result}\n</action_result>\n"
 
-            # Include log context in observation (legacy mode)
-            if self.accumulate_log_context and not self.memory_in_first_message:
+            # Include log context in observation
+            if self.accumulate_log_context:
                 log_context = self.log.build_context(detailed=True)
                 obs_content += f"\n<current_log_state>\n{log_context}\n</current_log_state>\n"
 
@@ -151,15 +134,6 @@ class ProReviewer(BaseAgent):
 
             # Sliding window for LLM inference (keeps context small)
             self._messages = self._messages[:2] + [{"role": "assistant", "content": self._last_llm_response}, {"role": "user", "content": obs_content}]
-
-            # Place memory/log state in the first user message instead of observation
-            if self.accumulate_log_context and self.memory_in_first_message:
-                first_msg = self._paper_intro
-                log_context = self.log.build_context(detailed=True)
-                first_msg += f"\n\nYour current review log is:\n<current_log_state>\n{log_context}\n</current_log_state>"
-                if max_turns is not None and current_turn is not None:
-                    first_msg += f"\n\n[Turn {current_turn}/{max_turns}]"
-                self._messages[1] = {"role": "user", "content": first_msg}
         
         # record the times of reading sections
         if "action_name" in info and "read_section" in info["action_name"]:
