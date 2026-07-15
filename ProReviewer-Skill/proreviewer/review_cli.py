@@ -2,15 +2,16 @@
 """CLI wrapper for ReviewLog — provides persistent state via JSON serialization.
 
 Usage:
-    python review_cli.py init paper.pdf        # convert PDF to paper.md, create review_log.json
+    python review_cli.py init paper.pdf              # creates review_<name>/ with paper.md + review_log.json
     python review_cli.py add_claim --text "..." --section "§1" --claim_type empirical
-    python review_cli.py show --detailed       # print full log state
+    python review_cli.py finalize                    # export review.md, print review + output path
 
 The agent reads paper.md directly using its Read/Grep tools.
-State is stored in review_log.json in the current working directory.
+State is stored in an output directory (auto-detected or specified via --dir).
 """
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -22,25 +23,64 @@ from reviewer_memory import ReviewLog, CONFERENCE_SCALES, DEFAULT_CONFERENCE, fo
 
 STATE_FILE = "review_log.json"
 PAPER_FILE = "paper.md"
+REVIEW_FILE = "review.md"
 
 
-def get_state_path():
-    return os.path.join(os.getcwd(), STATE_FILE)
+def get_output_dir(args) -> str:
+    """Get output directory from --dir flag. Required for all commands except init."""
+    d = getattr(args, "dir", None)
+    if not d:
+        print("Error: --dir is required. Pass the output directory created by 'init'.", file=sys.stderr)
+        sys.exit(1)
+    return os.path.abspath(d)
 
 
-def load_log() -> ReviewLog:
-    path = get_state_path()
+def load_log(output_dir: str) -> ReviewLog:
+    path = os.path.join(output_dir, STATE_FILE)
     if not os.path.exists(path):
-        print(f"Error: {STATE_FILE} not found. Run 'init' first.", file=sys.stderr)
+        print(f"Error: {STATE_FILE} not found in {output_dir}. Run 'init' first.", file=sys.stderr)
         sys.exit(1)
     with open(path) as f:
         return ReviewLog.model_validate_json(f.read())
 
 
-def save_log(log: ReviewLog):
-    path = get_state_path()
+def _strip_rl_fields(data: dict) -> dict:
+    """Remove RL-training-specific fields from serialized ReviewLog.
+
+    These fields (step counters, section_visits, search_history, etc.) are used
+    by the RL training pipeline but are always null/empty in CLI skill use.
+    """
+    # Top-level ReviewLog fields
+    for key in ("section_visits", "search_history", "current_iteration"):
+        data.pop(key, None)
+
+    # Per-entry step fields
+    for claim in data.get("claims", []):
+        claim.pop("step", None)
+        claim.pop("status_updated_step", None)
+    for question in data.get("questions", []):
+        question.pop("step", None)
+    for note in data.get("notes", []):
+        note.pop("step", None)
+
+    # ReviewOutline fields
+    outline = data.get("review_outline", {})
+    outline.pop("summary_step", None)
+    outline.pop("overall_score_step", None)
+    for section in ("strengths", "weaknesses", "questions"):
+        for item in outline.get(section, []):
+            item.pop("step", None)
+            item.pop("human_point", None)
+
+    return data
+
+
+def save_log(log: ReviewLog, output_dir: str):
+    path = os.path.join(output_dir, STATE_FILE)
+    data = log.model_dump()
+    data = _strip_rl_fields(data)
     with open(path, "w") as f:
-        f.write(log.model_dump_json(indent=2))
+        json.dump(data, f, indent=2)
 
 
 def split_list(value: str) -> list:
@@ -140,16 +180,59 @@ def resolve_tex_inputs(tex_path: str) -> str:
     return _resolve(tex_path)
 
 
+def make_output_dir_name(paper_path: str) -> str:
+    """Derive output directory name from paper filename.
+
+    e.g. 'my_paper.pdf' -> 'review_my_paper'
+    """
+    base = os.path.splitext(os.path.basename(paper_path))[0]
+    # Clean up: replace spaces/special chars with underscores
+    clean = re.sub(r'[^\w\-]', '_', base).strip('_')
+    # Truncate long names
+    if len(clean) > 60:
+        clean = clean[:60].rstrip('_')
+    return f"review_{clean}"
+
+
+def format_review(log: ReviewLog) -> str:
+    """Format the review outline as a clean markdown review."""
+    outline = log.review_outline
+    parts = []
+
+    if outline.summary:
+        parts.append("## Summary\n")
+        parts.append(outline.summary)
+        parts.append("")
+
+    if outline.strengths:
+        parts.append("## Strengths\n")
+        for item in outline.strengths:
+            parts.append(item.text)
+        parts.append("")
+
+    if outline.weaknesses:
+        parts.append("## Weaknesses\n")
+        for item in outline.weaknesses:
+            parts.append(item.text)
+        parts.append("")
+
+    if outline.questions:
+        parts.append("## Questions for Authors\n")
+        for item in outline.questions:
+            parts.append(item.text)
+        parts.append("")
+
+    if outline.overall_score is not None:
+        parts.append("## Overall Score\n")
+        parts.append(format_score_with_scale(outline.overall_score, log.conference))
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 # --- Commands ---
 
 def cmd_init(args):
-    state_path = get_state_path()
-    paper_path = os.path.join(os.getcwd(), PAPER_FILE)
-
-    if os.path.exists(state_path) and not args.force:
-        print(f"{STATE_FILE} already exists. Use --force to overwrite.", file=sys.stderr)
-        sys.exit(1)
-
     input_path = args.paper
     if not os.path.exists(input_path):
         print(f"Error: path not found: {input_path}", file=sys.stderr)
@@ -183,6 +266,20 @@ def cmd_init(args):
         input_path = found
         print(f"Found root tex file: {input_path}")
 
+    # Create output directory
+    explicit_dir = getattr(args, "dir", None)
+    if explicit_dir:
+        output_dir = os.path.abspath(explicit_dir)
+    else:
+        output_dir = os.path.join(os.getcwd(), make_output_dir_name(input_path))
+
+    state_path = os.path.join(output_dir, STATE_FILE)
+    if os.path.exists(state_path) and not args.force:
+        print(f"{state_path} already exists. Use --force to overwrite.", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(output_dir, exist_ok=True)
+
     ext = os.path.splitext(input_path)[1].lower()
 
     if ext == ".pdf":
@@ -199,6 +296,7 @@ def cmd_init(args):
         sys.exit(1)
 
     # Save paper text
+    paper_path = os.path.join(output_dir, PAPER_FILE)
     with open(paper_path, "w", encoding="utf-8") as f:
         f.write(text)
 
@@ -210,19 +308,21 @@ def cmd_init(args):
 
     log = ReviewLog(conference=conf)
     log.review_outline.conference = conf
-    save_log(log)
+    save_log(log, output_dir)
 
     scale = CONFERENCE_SCALES[conf]
     valid = scale["scores"]
 
-    print(f"Paper saved → {PAPER_FILE} ({len(text)} chars)")
-    print(f"ReviewLog initialized → {STATE_FILE}")
+    print(f"Output directory → {output_dir}")
+    print(f"Paper saved → {os.path.join(output_dir, PAPER_FILE)} ({len(text)} chars)")
+    print(f"ReviewLog initialized → {os.path.join(output_dir, STATE_FILE)}")
     print(f"Conference: {scale['name']}  (score scale: {valid})")
-    print(f"\nRead paper.md with your Read tool to begin reviewing.")
+    print(f"\nRead {os.path.join(output_dir, PAPER_FILE)} with your Read tool to begin reviewing.")
 
 
 def cmd_add_claim(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     issues = split_list(args.issues) if args.issues else None
     claim_id = log.add_claim(
         text=args.text,
@@ -233,13 +333,14 @@ def cmd_add_claim(args):
     if claim_id is None:
         print("Skipped: duplicate claim.")
     else:
-        save_log(log)
+        save_log(log, output_dir)
         claim = log.get_claim(claim_id)
         print(f"Added {claim_id}: {claim.to_prompt_str()}")
 
 
 def cmd_add_question(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     related = split_list(args.related_claims) if args.related_claims else None
     question_id = log.add_question(
         question=args.text,
@@ -250,13 +351,14 @@ def cmd_add_question(args):
     if question_id is None:
         print("Skipped: duplicate question.")
     else:
-        save_log(log)
+        save_log(log, output_dir)
         q = log.get_question(question_id)
         print(f"Added {question_id}: {q.to_prompt_str()}")
 
 
 def cmd_add_note(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     tag = split_list(args.tag) if args.tag else None
     note_id = log.add_note(
         text=args.text,
@@ -266,13 +368,14 @@ def cmd_add_note(args):
     if note_id is None:
         print("Skipped: duplicate note.")
     else:
-        save_log(log)
+        save_log(log, output_dir)
         note = log.get_note(note_id)
         print(f"Added {note_id}: {note.to_prompt_str()}")
 
 
 def cmd_update_claim(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     cross_refs = split_list(args.cross_refs) if args.cross_refs else None
     ok = log.update_claim_status(
         claim_id=args.id,
@@ -283,13 +386,14 @@ def cmd_update_claim(args):
     if not ok:
         print(f"Error: claim {args.id} not found.", file=sys.stderr)
         sys.exit(1)
-    save_log(log)
+    save_log(log, output_dir)
     claim = log.get_claim(args.id)
     print(f"Updated {args.id}: {claim.to_prompt_str(detailed=True)}")
 
 
 def cmd_resolve_question(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     sections = split_list(args.sections) if args.sections else []
     ok = log.resolve_question(
         question_id=args.id,
@@ -300,13 +404,14 @@ def cmd_resolve_question(args):
     if not ok:
         print(f"Error: question {args.id} not found.", file=sys.stderr)
         sys.exit(1)
-    save_log(log)
+    save_log(log, output_dir)
     q = log.get_question(args.id)
     print(f"Resolved {args.id}: {q.to_prompt_str(detailed=True)}")
 
 
 def cmd_outline(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     section = args.section
 
     if section == "overall_score":
@@ -317,13 +422,13 @@ def cmd_outline(args):
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        save_log(log)
+        save_log(log, output_dir)
         print(f"Set overall_score: {format_score_with_scale(score, log.conference)}")
         return
 
     if section == "summary":
         log.update_outline(section="summary", content=args.content)
-        save_log(log)
+        save_log(log, output_dir)
         print(f"Set summary: {args.content[:80]}...")
         return
 
@@ -347,14 +452,15 @@ def cmd_outline(args):
     if result == "duplicate_skipped":
         print("Skipped: duplicate outline item.")
     else:
-        save_log(log)
+        save_log(log, output_dir)
         items = getattr(log.review_outline, section)
         latest = items[-1]
         print(f"Added {section}: {latest.to_prompt_str()}")
 
 
 def cmd_set_conference(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     conf = args.conference.lower()
     if conf not in CONFERENCE_SCALES:
         print(f"Error: unknown conference '{conf}'. Supported: {', '.join(CONFERENCE_SCALES.keys())}", file=sys.stderr)
@@ -373,7 +479,7 @@ def cmd_set_conference(args):
             print(f"  Score has been cleared. Use 'outline --section overall_score' to set a new one.")
             log.review_outline.overall_score = None
 
-    save_log(log)
+    save_log(log, output_dir)
     scale = CONFERENCE_SCALES[conf]
     print(f"Conference set to: {scale['name']}")
     print(f"Score scale: {scale['scores']}")
@@ -382,18 +488,52 @@ def cmd_set_conference(args):
 
 
 def cmd_show(args):
-    log = load_log()
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
     print(log.build_context(detailed=args.detailed))
+
+
+def cmd_export(args):
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
+    review_text = format_review(log)
+    out_path = os.path.join(output_dir, args.output or REVIEW_FILE)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(review_text)
+    print(f"Review exported → {out_path}")
+
+
+def cmd_finalize(args):
+    """Export review.md, print the review content, and show the output folder."""
+    output_dir = get_output_dir(args)
+    log = load_log(output_dir)
+
+    # Export review.md
+    review_text = format_review(log)
+    review_path = os.path.join(output_dir, REVIEW_FILE)
+    with open(review_path, "w", encoding="utf-8") as f:
+        f.write(review_text)
+
+    # Print the review content
+    print(review_text)
+
+    # Print output folder summary
+    print("---")
+    print(f"Output folder: {output_dir}")
+    print(f"  {PAPER_FILE}         — converted paper")
+    print(f"  {STATE_FILE}   — investigation log (claims, questions, notes)")
+    print(f"  {REVIEW_FILE}        — final review")
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="ReviewLog CLI — persistent evidence-based review state"
     )
+    parser.add_argument("--dir", help="Output directory (auto-detected if omitted)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # init
-    p = sub.add_parser("init", help="Convert paper and create review_log.json")
+    p = sub.add_parser("init", help="Convert paper and create output directory")
     p.add_argument("paper", help="Path to paper file (.pdf, .tex, .md) or directory containing main.tex")
     p.add_argument("--force", action="store_true", help="Overwrite existing state")
     p.add_argument("--conference", default=DEFAULT_CONFERENCE,
@@ -452,6 +592,13 @@ def main():
     p = sub.add_parser("show", help="Print current log state")
     p.add_argument("--detailed", action="store_true", help="Show full details")
 
+    # export
+    p = sub.add_parser("export", help="Export the review outline as a clean markdown file")
+    p.add_argument("--output", help=f"Output file path (default: {REVIEW_FILE})")
+
+    # finalize
+    p = sub.add_parser("finalize", help="Export review, print content, and show output folder")
+
     args = parser.parse_args()
 
     commands = {
@@ -464,6 +611,8 @@ def main():
         "outline": cmd_outline,
         "set_conference": cmd_set_conference,
         "show": cmd_show,
+        "export": cmd_export,
+        "finalize": cmd_finalize,
     }
     commands[args.command](args)
 

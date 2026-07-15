@@ -14,9 +14,11 @@ ProReviewer is a structured method for reviewing scientific papers. Instead of r
 
 ## Workflow
 
-Use `${CLAUDE_SKILL_DIR}/review_cli.py` to maintain a persistent ReviewLog. The review runs as a read-then-operate loop:
+Use `${CLAUDE_SKILL_DIR}/review_cli.py` to maintain a persistent ReviewLog. The ReviewLog is your **working state**: after every step you consult it and let its open entries decide your next action. Do **not** read the paper linearly front-to-back and then batch-log impressions — that reduces the log to post-hoc documentation. Instead, unverified claims and open questions determine *where you read next*.
 
-1. **Initialize** — convert the paper and create the log. Use `--conference` to set the rating scale.
+**IMPORTANT:** The `init` command prints an output directory path (e.g. `review_my_paper/`). You MUST pass `--dir <that_path>` to every subsequent command. Store the path in a variable for reuse.
+
+1. **Initialize** — convert the paper and create the output directory. Use `--conference` to set the rating scale.
    ```bash
    python ${CLAUDE_SKILL_DIR}/review_cli.py init paper.pdf                      # default: ICLR scale
    python ${CLAUDE_SKILL_DIR}/review_cli.py init paper.pdf --conference icml     # ICML 1-6 scale
@@ -24,20 +26,29 @@ Use `${CLAUDE_SKILL_DIR}/review_cli.py` to maintain a persistent ReviewLog. The 
    python ${CLAUDE_SKILL_DIR}/review_cli.py init paper.pdf --conference acl      # ACL/ARR 1-5 scale (0.5 steps)
    python ${CLAUDE_SKILL_DIR}/review_cli.py init paper.pdf --conference emnlp    # EMNLP/ARR 1-5 scale (0.5 steps)
    ```
+   This creates `review_<paper_name>/` containing `paper.md` and `review_log.json`. Note the output directory path from the output — you need it for all subsequent commands.
+
    Accepts `.pdf`, `.tex`, `.md`, or a **directory** containing a LaTeX project:
    ```bash
    python ${CLAUDE_SKILL_DIR}/review_cli.py init paper.tex            # single .tex file
    python ${CLAUDE_SKILL_DIR}/review_cli.py init /path/to/tex-folder  # directory → auto-finds main.tex
    ```
    For `.tex` files, `\input{...}` and `\include{...}` are recursively resolved so the full paper source is inlined into `paper.md`. When a directory is given, the CLI looks for `main.tex`, `paper.tex`, or `manuscript.tex` (in that order), or uses the sole `.tex` file if only one exists.
-2. **Read** — read `paper.md` using your Read tool. Read it in chunks (by section or page range).
-3. **Operate the log** — after each read, run CLI commands to add claims/questions/notes or update existing entries.
-4. **Search** — use your Grep tool on `paper.md` to find specific terms.
-5. **Repeat** — read the next part and operate the log again. Cross-reference new evidence against earlier entries.
-6. **Finalize** — once all entries are resolved, build the outline and show the final state.
+2. **Investigation loop** — repeat until every entry is settled. Each iteration:
+   1. **Consult the log** — run `show` (or recall the current state) and list what is unsettled: `to_be_verified`/flagged claims and `open` questions.
+   2. **Pick a target** — choose the highest-priority unsettled entry and decide where its evidence should live (e.g., "C2 claims a 3x speedup → check the results table in §4", "Q1 asks about baselines → Grep for baseline names"). State which entry you are investigating before reading. **If the log is empty** (first iteration), the target is the paper's central claims: read the abstract, introduction, and contribution statements, then log them — claims stay `to_be_verified` and questions stay `open`, since you have not seen the evidence yet.
+   3. **Gather evidence** — Read the targeted section/table/appendix, or Grep `<output_dir>/paper.md` for specific terms. Prefer targeted jumps over sequential reading; read a new section in full only when it is itself the target.
+   4. **Update the log** — resolve or update the targeted entries with the evidence found (`update_claim`, `resolve_question`), citing sections in `--cross_refs`/`--sections`.
+   5. **Log new discoveries** — earlier entries are a starting point, not the full agenda. Every chunk you read is also *new material*: it contains its own author claims (method design choices, ablation conclusions, reward/loss definitions) and raises its own suspicions. Log these as new entries even though you came for something else — deep-paper issues (e.g., a flawed reward design in a method section, a mismatch between an ablation table and its narrative) are usually invisible from the abstract and only enter the log this way.
+3. **Exit condition** — the loop ends only when every claim has a final status (`supported`/`weak`/`invalid`) and every question is `resolved` or confirmed unanswerable (a genuine absence, which maps to a weakness). Run `show` to verify. If any section of the paper was never visited, check it before exiting — it may contain evidence that overturns earlier statuses.
+4. **Finalize** — build the outline from the settled entries and finalize. This exports `review.md`, prints the review content, and shows the output folder path.
    ```bash
-   python ${CLAUDE_SKILL_DIR}/review_cli.py show --detailed
+   python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> finalize
    ```
+   The output folder contains three artifacts:
+   - `paper.md` — converted paper
+   - `review_log.json` — investigation log (claims, questions, notes)
+   - `review.md` — final review
 
 ## The ReviewLog
 
@@ -85,32 +96,34 @@ Points of **uncertainty or suspicion** you want to investigate. Each has a resol
 
 ### Operating the log
 
-You maintain the log through `${CLAUDE_SKILL_DIR}/review_cli.py`. State persists in `review_log.json` between calls.
+You maintain the log through `${CLAUDE_SKILL_DIR}/review_cli.py`. State persists in `review_log.json` between calls. **Always pass `--dir <output_dir>`** to every command after init.
 
 **1. Log** — add entries as you read.
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/review_cli.py add_claim --text "Our method achieves 3x speedup" --section "§Abstract" --claim_type "empirical" --issues "3x over which baseline?"
-python ${CLAUDE_SKILL_DIR}/review_cli.py add_question --text "Does the paper compare against DPO?" --section "§1" --related_claims "C1"
-python ${CLAUDE_SKILL_DIR}/review_cli.py add_note --text "Clear motivation — real bottleneck" --section "§1" --tag "methodology"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> add_claim --text "Our method achieves 3x speedup" --section "§Abstract" --claim_type "empirical" --issues "3x over which baseline?"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> add_question --text "Does the paper compare against DPO?" --section "§1" --related_claims "C1"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> add_note --text "Clear motivation — real bottleneck" --section "§1" --tag "methodology"
 ```
 
 **2. Update** — modify entries when you find new evidence.
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/review_cli.py update_claim --id C1 --status weak --reason "Table 3 shows 2.8x, not 3x" --cross_refs "§4.1,Appendix A1"
-python ${CLAUDE_SKILL_DIR}/review_cli.py resolve_question --id Q1 --answer "Yes, Table 2 includes DPO" --sections "§4.2"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> update_claim --id C1 --status weak --reason "Table 3 shows 2.8x, not 3x" --cross_refs "§4.1,Appendix A1"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> resolve_question --id Q1 --answer "Yes, Table 2 includes DPO" --sections "§4.2"
 ```
 
 Every claim must reach a final status. If a question has no answer, keep it open — that absence maps to a weakness. Cross-reference as you read: when new evidence relates to an earlier entry, update it.
 
+**Investigation discipline:** logging and resolving are separate acts. An entry is added when something *needs* checking and updated when evidence is *found* — normally in a later iteration, after a targeted read of a different part of the paper (a claim in §1 is verified against the tables in §4, not against §1 itself). Only add-and-resolve in the same step when the current chunk genuinely contains the evidence. If you find yourself resolving every entry immediately after adding it, you are documenting impressions, not investigating.
+
 **3. Outline** — build the review from resolved entries. Each item must cite evidence tags.
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/review_cli.py outline --section strengths --content "Well-motivated contribution..." --claims "C1" --notes "N1"
-python ${CLAUDE_SKILL_DIR}/review_cli.py outline --section weaknesses --content "Speedup overstated..." --claims "C1"
-python ${CLAUDE_SKILL_DIR}/review_cli.py outline --section summary --content "This paper proposes..."
-python ${CLAUDE_SKILL_DIR}/review_cli.py outline --section overall_score --content 6
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section strengths --content "Well-motivated contribution..." --claims "C1" --notes "N1"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section weaknesses --content "Speedup overstated..." --claims "C1"
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section summary --content "This paper proposes..."
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section overall_score --content 6
 ```
 
 The overall score is validated against the conference scale set at init. Invalid scores are rejected with an error showing the valid values.
@@ -118,14 +131,20 @@ The overall score is validated against the conference scale set at init. Invalid
 **4. Change conference** — switch the rating scale after init (clears the score if it's invalid for the new scale).
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/review_cli.py set_conference neurips
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> set_conference neurips
 ```
 
 **5. View** — check log state at any time.
 
 ```bash
-python ${CLAUDE_SKILL_DIR}/review_cli.py show            # brief: status counts + recent entries
-python ${CLAUDE_SKILL_DIR}/review_cli.py show --detailed  # full: all entries with reasoning + outline
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> show            # brief: status counts + recent entries
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> show --detailed  # full: all entries with reasoning + outline
+```
+
+**6. Finalize** — export and print the final review.
+
+```bash
+python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> finalize    # exports review.md, prints review + output folder
 ```
 
 ## Conference Rating Scales
@@ -188,24 +207,9 @@ Each point should help authors improve their paper. Ask: would reading this poin
 5. **Duplicate points** — raising the same concern in different wording across multiple weaknesses.
 6. **Generic statements** — "the method has limitations" or "more experiments are needed" without specifying which.
 7. **Questions that restate weaknesses** — "Questions for Authors" should ask things they can clarify, not restate what weaknesses already say.
+8. **Post-hoc logging** — reading the entire paper first, then batch-logging entries and resolving them immediately from memory. The log must drive the reading order: log early, then investigate targeted sections to settle entries.
+9. **Ignoring the log state** — never running `show` and never letting open entries determine the next read. If the next section you read is always just "the next section," you are not investigating.
 
 ## Reference
 
 - ReviewLog data structures: `reviewer_memory.py`
-
-## Platform Notes
-
-This skill uses `${CLAUDE_SKILL_DIR}` to reference the directory containing these files. If your platform does not support this variable, replace it with the absolute path to the directory where `review_cli.py` and `reviewer_memory.py` are installed.
-
-Typical install locations:
-
-| Platform | Path |
-|---|---|
-| Claude Code (global) | `~/.claude/skills/proreviewer/` |
-| Claude Code (project) | `.claude/skills/proreviewer/` |
-| Codex CLI | `~/.agents/skills/proreviewer/` |
-| Gemini CLI | `~/.gemini/skills/proreviewer/` |
-
-<!-- For agents that do not expand ${CLAUDE_SKILL_DIR}: resolve it to the
-     directory containing this SKILL.md file, then call review_cli.py from
-     that directory. All three Python files sit side-by-side. -->
