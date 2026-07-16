@@ -48,7 +48,7 @@ Use `${CLAUDE_SKILL_DIR}/review_cli.py` to maintain a persistent ReviewLog. The 
    The output folder contains three artifacts:
    - `paper.md` — converted paper
    - `review_log.json` — investigation log (claims, questions, notes)
-   - `review.md` — final review
+   - `review.md` — final review; each point carries clickable evidence links (e.g. `[C3]`) that jump to an Evidence appendix expanding the underlying log records. Pass `--no-evidence` to `finalize`/`export` for a plain review without links.
 
 ## The ReviewLog
 
@@ -117,7 +117,7 @@ Every claim must reach a final status. If a question has no answer, keep it open
 
 **Investigation discipline:** logging and resolving are separate acts. An entry is added when something *needs* checking and updated when evidence is *found* — normally in a later iteration, after a targeted read of a different part of the paper (a claim in §1 is verified against the tables in §4, not against §1 itself). Only add-and-resolve in the same step when the current chunk genuinely contains the evidence. If you find yourself resolving every entry immediately after adding it, you are documenting impressions, not investigating.
 
-**3. Outline** — build the review from resolved entries. Each item must cite evidence tags.
+**3. Outline** — build the review from resolved entries. Add **one point per call**, and cite evidence only via the `--claims`/`--questions`/`--notes` args. Never write tag IDs (C1, Q2, N3...) inside `--content` — at finalize they are rendered automatically as clickable links after each point. Do incorporate the *substance* of the tagged records (numbers, sections, findings) into the content text.
 
 ```bash
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section strengths --content "Well-motivated contribution..." --claims "C1" --notes "N1"

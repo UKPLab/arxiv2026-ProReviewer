@@ -194,8 +194,77 @@ def make_output_dir_name(paper_path: str) -> str:
     return f"review_{clean}"
 
 
-def format_review(log: ReviewLog) -> str:
-    """Format the review outline as a clean markdown review."""
+def _item_refs(item) -> list:
+    """All evidence IDs referenced by an outline item, in tag order."""
+    return list(item.related_claims) + list(item.related_questions) + list(item.related_notes)
+
+
+def _format_item_with_links(item) -> str:
+    """Render an outline item with its evidence tags as clickable anchor links."""
+    refs = _item_refs(item)
+    if not refs:
+        return item.text
+    links = ", ".join(f"[{r}](#{r.lower()})" for r in refs)
+    return f"{item.text} [{links}]"
+
+
+def _ref_sort_key(ref_id: str):
+    """Sort evidence IDs as C1..Cn, then Q1..Qn, then N1..Nn."""
+    order = {"C": 0, "Q": 1, "N": 2}
+    m = re.match(r"([CQN])(\d+)$", ref_id)
+    if not m:
+        return (3, 0, ref_id)
+    return (order[m.group(1)], int(m.group(2)), ref_id)
+
+
+def _format_evidence_section(log: ReviewLog) -> list:
+    """Build the Evidence appendix: one anchored entry per referenced record."""
+    outline = log.review_outline
+    referenced = set()
+    for section in (outline.strengths, outline.weaknesses, outline.questions):
+        for item in section:
+            referenced.update(_item_refs(item))
+    if not referenced:
+        return []
+
+    parts = ["## Evidence\n"]
+    for ref_id in sorted(referenced, key=_ref_sort_key):
+        anchor = f'<a id="{ref_id.lower()}"></a>'
+        if ref_id.startswith("C"):
+            claim = log.get_claim(ref_id)
+            if claim is None:
+                continue
+            parts.append(f'{anchor}**{ref_id}** · claim ({claim.status}) · {claim.section}')
+            parts.append(f"> {claim.text}")
+            if claim.verifier_reason:
+                parts.append(f">\n> *Verification:* {claim.verifier_reason}")
+        elif ref_id.startswith("Q"):
+            question = log.get_question(ref_id)
+            if question is None:
+                continue
+            parts.append(f'{anchor}**{ref_id}** · question ({question.status}) · {question.source_section}')
+            parts.append(f"> {question.question}")
+            if question.answer:
+                sections = f" ({', '.join(question.answer_sections)})" if question.answer_sections else ""
+                parts.append(f">\n> *Answer:* {question.answer}{sections}")
+        elif ref_id.startswith("N"):
+            note = log.get_note(ref_id)
+            if note is None:
+                continue
+            tags = f" · {', '.join(note.tag)}" if note.tag else ""
+            parts.append(f'{anchor}**{ref_id}** · note · {note.section}{tags}')
+            parts.append(f"> {note.text}")
+        parts.append("")
+    return parts
+
+
+def format_review(log: ReviewLog, include_evidence: bool = True) -> str:
+    """Format the review outline as a clean markdown review.
+
+    When include_evidence is True, each strength/weakness/question is
+    annotated with links (e.g. [C3]) that jump to an Evidence appendix
+    describing the underlying claim/question/note records.
+    """
     outline = log.review_outline
     parts = []
 
@@ -207,25 +276,28 @@ def format_review(log: ReviewLog) -> str:
     if outline.strengths:
         parts.append("## Strengths\n")
         for item in outline.strengths:
-            parts.append(item.text)
+            parts.append("- " + (_format_item_with_links(item) if include_evidence else item.text))
         parts.append("")
 
     if outline.weaknesses:
         parts.append("## Weaknesses\n")
         for item in outline.weaknesses:
-            parts.append(item.text)
+            parts.append("- " + (_format_item_with_links(item) if include_evidence else item.text))
         parts.append("")
 
     if outline.questions:
         parts.append("## Questions for Authors\n")
         for item in outline.questions:
-            parts.append(item.text)
+            parts.append("- " + (_format_item_with_links(item) if include_evidence else item.text))
         parts.append("")
 
     if outline.overall_score is not None:
         parts.append("## Overall Score\n")
         parts.append(format_score_with_scale(outline.overall_score, log.conference))
         parts.append("")
+
+    if include_evidence:
+        parts.extend(_format_evidence_section(log))
 
     return "\n".join(parts)
 
@@ -496,7 +568,7 @@ def cmd_show(args):
 def cmd_export(args):
     output_dir = get_output_dir(args)
     log = load_log(output_dir)
-    review_text = format_review(log)
+    review_text = format_review(log, include_evidence=not args.no_evidence)
     out_path = os.path.join(output_dir, args.output or REVIEW_FILE)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(review_text)
@@ -509,7 +581,7 @@ def cmd_finalize(args):
     log = load_log(output_dir)
 
     # Export review.md
-    review_text = format_review(log)
+    review_text = format_review(log, include_evidence=not args.no_evidence)
     review_path = os.path.join(output_dir, REVIEW_FILE)
     with open(review_path, "w", encoding="utf-8") as f:
         f.write(review_text)
@@ -595,9 +667,13 @@ def main():
     # export
     p = sub.add_parser("export", help="Export the review outline as a clean markdown file")
     p.add_argument("--output", help=f"Output file path (default: {REVIEW_FILE})")
+    p.add_argument("--no-evidence", action="store_true",
+                    help="Omit evidence links and the Evidence appendix")
 
     # finalize
     p = sub.add_parser("finalize", help="Export review, print content, and show output folder")
+    p.add_argument("--no-evidence", action="store_true",
+                    help="Omit evidence links and the Evidence appendix")
 
     args = parser.parse_args()
 
