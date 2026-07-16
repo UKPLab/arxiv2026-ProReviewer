@@ -2,8 +2,6 @@
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.13349-b31b1b.svg)](https://arxiv.org/abs/2606.13349)
 [![Skill](https://img.shields.io/badge/Skill-ProReviewer-blue)](ProReviewer-Skill/)
-[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-coming%20soon-yellow)](#)
-[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-coming%20soon-yellow)](#)
 [![License](https://img.shields.io/github/license/UKPLab/ukp-project-template)](https://opensource.org/licenses/Apache-2.0)
 
 **An AI agent that reviews papers the way human experts do — reading step by step, taking notes, and verifying claims before judging.**
@@ -20,7 +18,7 @@ There are three ways to use ProReviewer. Pick the one that fits your setup:
 |---|---|---|---|
 | **What** | Install as a skill in your CLI agent | Run the agent loop against any LLM API | Run inference with an RL-trained checkpoint |
 | **GPU required?** | No | No | Yes |
-| **Model** | Uses your CLI agent | Any model with API keys| Fine-tuned ProReviewer checkpoint |
+| **Model** | Uses your CLI agent | Any model with API keys | [Fine-tuned ProReviewer checkpoint](#) |
 
 ---
 
@@ -143,6 +141,8 @@ cp config.toml.example config.toml
 ---
 
 ## Training
+
+[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-ProReviewer-yellow)](https://huggingface.co/datasets/UKPLab/ProReviewer-Dataset)
 
 Training follows a three-stage pipeline: **SFT warm-start → Stage 1 RL → Stage 2 RL**. Ready-to-run scripts are provided in [`reviewer/scripts/`](reviewer/scripts/).
 
