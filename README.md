@@ -16,7 +16,7 @@ There are three ways to use ProReviewer. Pick the one that fits your setup:
 
 | | **Skill** | **API Prompting** | **Trained Model** |
 |---|---|---|---|
-| **What** | Install as a skill in your CLI agent | Run the agent loop against any LLM API | Run inference with an RL-trained checkpoint |
+| **What** | Install as a skill in your CLI agent (e.g., Claude code, Codex) | Run the agent loop against any LLM API | Run inference with an RL-trained checkpoint |
 | **GPU required?** | No | No | Yes |
 | **Model** | Uses your CLI agent | Any model with API keys | [Fine-tuned ProReviewer checkpoint](#) |
 
