@@ -37,7 +37,7 @@ Global (available in all projects):
 
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
-cp -R arxiv2026-ProReviewer/proreviewer ~/.claude/skills/
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.claude/skills/
 ```
 
 Project-level (available only in this project):
@@ -45,46 +45,51 @@ Project-level (available only in this project):
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
 mkdir -p .claude/skills
-cp -R arxiv2026-ProReviewer/proreviewer .claude/skills/
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer .claude/skills/
 ```
 
 ### Codex CLI
 
-Global:
+Global (available in all projects):
 
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
-mkdir -p ~/.agents/skills
-cp -R arxiv2026-ProReviewer/proreviewer ~/.agents/skills/
+mkdir -p ~/.codex/skills
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.codex/skills/
 ```
 
-Project-level:
+Project-level (available only in this project):
 
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
 mkdir -p .agents/skills
-cp -R arxiv2026-ProReviewer/proreviewer .agents/skills/
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer .agents/skills/
 ```
 
 ### Gemini CLI
 
+Global (available in all projects):
+
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
 mkdir -p ~/.gemini/skills
-cp -R arxiv2026-ProReviewer/proreviewer ~/.gemini/skills/
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.gemini/skills/
 ```
 
-Or use the cross-platform path:
+Project-level (available only in this project):
 
 ```bash
-mkdir -p ~/.agents/skills
-cp -R arxiv2026-ProReviewer/proreviewer ~/.agents/skills/
+git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
+mkdir -p .gemini/skills
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer .gemini/skills/
 ```
 
-### One-liner (any platform)
+### One-liner (cross-platform project install)
+
+Codex CLI and Gemini CLI both scan the shared `.agents/skills/` directory at the project level:
 
 ```bash
-git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git && cp -R arxiv2026-ProReviewer/proreviewer ~/.agents/skills/
+git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git && mkdir -p .agents/skills && cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer .agents/skills/
 ```
 
 ## Usage
