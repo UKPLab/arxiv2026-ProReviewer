@@ -54,8 +54,8 @@ Global (available in all projects):
 
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
-mkdir -p ~/.codex/skills
-cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.codex/skills/
+mkdir -p ~/.agents/skills
+cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.agents/skills/
 ```
 
 Project-level (available only in this project):
