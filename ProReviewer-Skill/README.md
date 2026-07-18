@@ -37,6 +37,7 @@ Global (available in all projects):
 
 ```bash
 git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git
+mkdir -p ~/.claude/skills
 cp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.claude/skills/
 ```
 
