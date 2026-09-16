@@ -1,0 +1,1313 @@
+/* ProReviewer demo
+ *
+ * Two disjoint palettes, and the separation is load-bearing:
+ *
+ *   CHROME  — neutral. Plus exactly one accent hue, used for focus rings, links,
+ *             the current step, and the landing page's emphasis. Its tints
+ *             (--accent-soft/mid/line) are the only way to add colour here: a
+ *             second hue would start competing with STATUS for meaning.
+ *   STATUS  — semantic. --st-* appear only inside status chips, revision spines
+ *             and the aggregate bar. A "Strengths" heading must not be green
+ *             just because green exists, or colour stops meaning anything.
+ *
+ * Green/amber/red is the deuteranopia-hostile axis and `weak` is 10 of the 16
+ * claims here, so status is carried on three redundant channels: the glyph, the
+ * word, and the chip's border style. It survives greyscale.
+ *
+ * Type: serif = the paper's own words · sans = the agent · mono = instrumentation
+ * (identifiers, statuses, line numbers, all numerals).
+ */
+
+:root {
+  --bg: #f7f9fc;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eef2f8;
+  --bg-touch: #edf4ff;
+  --fg: #17233a;
+  --fg-muted: #59677e;
+  --fg-faint: #8290a5;
+  --line: #dce4f0;
+  --line-strong: #bcc9da;
+  --accent: #2563d9;
+  /* Derived from --accent, never a second hue: the landing gets depth without
+     spending a colour that status needs. */
+  --accent-soft: rgba(37, 99, 217, .075);
+  --accent-mid: rgba(37, 99, 217, .15);
+  --accent-line: rgba(37, 99, 217, .3);
+
+  --st-unknown: #6d6862;
+  --st-weak: #8a5309;
+  --st-supported: #10684a;
+  --st-invalid: #a3261f;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --wrap: 46rem;
+  --topbar-h: 4.25rem;
+  --radius: 10px;
+  --radius-lg: 18px;
+  --shadow-sm: 0 1px 2px rgba(23, 35, 58, .04), 0 5px 16px rgba(23, 35, 58, .035);
+  --shadow: 0 12px 28px rgba(23, 35, 58, .07), 0 2px 5px rgba(23, 35, 58, .035);
+  --shadow-lg: 0 24px 60px rgba(23, 35, 58, .11), 0 5px 15px rgba(23, 35, 58, .04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] { color-scheme: dark; }
+  :root[data-theme="auto"] {
+    --bg: #0d1422;
+    --bg-raised: #151f31;
+    --bg-sunken: #101a2b;
+    --bg-touch: #132440;
+    --fg: #e8eef8;
+    --fg-muted: #adbad0;
+    --fg-faint: #7f91ad;
+    --line: #27364e;
+    --line-strong: #3b4e6a;
+    --accent: #8ab4ff;
+    --accent-soft: rgba(138, 180, 255, .1);
+    --accent-mid: rgba(138, 180, 255, .2);
+    --accent-line: rgba(138, 180, 255, .38);
+    --st-unknown: #9a948b;
+    /* Amber vibrates on near-black; desaturated and lightened to hold 4.5:1. */
+    --st-weak: #d6a256;
+    --st-supported: #5ec79b;
+    --st-invalid: #ef8279;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .18), 0 5px 16px rgba(0, 0, 0, .12);
+    --shadow: 0 14px 28px rgba(0, 0, 0, .22), 0 2px 5px rgba(0, 0, 0, .12);
+    --shadow-lg: 0 25px 60px rgba(0, 0, 0, .3), 0 5px 15px rgba(0, 0, 0, .15);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1422;
+  --bg-raised: #151f31;
+  --bg-sunken: #101a2b;
+  --bg-touch: #132440;
+  --fg: #e8eef8;
+  --fg-muted: #adbad0;
+  --fg-faint: #7f91ad;
+  --line: #27364e;
+  --line-strong: #3b4e6a;
+  --accent: #8ab4ff;
+  --accent-soft: rgba(138, 180, 255, .1);
+  --accent-mid: rgba(138, 180, 255, .2);
+  --accent-line: rgba(138, 180, 255, .38);
+  --st-unknown: #9a948b;
+  --st-weak: #d6a256;
+  --st-supported: #5ec79b;
+  --st-invalid: #ef8279;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .18), 0 5px 16px rgba(0, 0, 0, .12);
+  --shadow: 0 14px 28px rgba(0, 0, 0, .22), 0 2px 5px rgba(0, 0, 0, .12);
+  --shadow-lg: 0 25px 60px rgba(0, 0, 0, .3), 0 5px 15px rgba(0, 0, 0, .15);
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--fg);
+  background:
+    radial-gradient(55rem 30rem at 8% -10%, var(--accent-soft), transparent 66%),
+    radial-gradient(45rem 26rem at 100% 8%, var(--accent-soft), transparent 72%),
+    var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+h1, h2, h3 { font-weight: 600; line-height: 1.25; }
+a { color: var(--accent); }
+code, kbd { font-family: var(--mono); font-size: 0.88em; }
+kbd {
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 .3em;
+  background: var(--bg-raised);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip {
+  position: absolute; left: -9999px; top: 0; z-index: 20;
+  background: var(--bg-raised); padding: .6rem 1rem; border: 1px solid var(--accent);
+}
+.skip:focus { left: .5rem; top: .5rem; }
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 1.25rem;
+  height: var(--topbar-h); padding: 0 1rem;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex; flex-direction: column; line-height: 1.15;
+  text-decoration: none; color: inherit;
+}
+.brand-name { font-weight: 650; letter-spacing: -0.01em; }
+.brand-sub { font-size: .72rem; color: var(--fg-faint); }
+
+.sessions { display: flex; gap: .4rem; flex: 1 1 auto; min-width: 0; }
+.sessions button {
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: .05rem; padding: .3rem .65rem;
+  background: transparent; border: 1px solid transparent; border-radius: var(--radius);
+  color: var(--fg-muted); font: inherit; cursor: pointer; text-align: left;
+}
+.sessions button[aria-selected="true"] {
+  background: var(--bg-sunken); border-color: var(--line);
+  color: var(--fg);
+}
+.sessions .s-title { font-size: .82rem; font-weight: 600; }
+/* The run's provenance shape, not its score: the score is the one output with
+ * no evidence links, so it does not belong in the page chrome. */
+.sessions .s-shape { font-family: var(--mono); font-size: .68rem; color: var(--fg-faint); }
+.sessions button[aria-selected="true"] .s-shape { color: var(--fg-muted); }
+.sessions[data-single="1"] button { cursor: default; }
+
+.views { display: flex; gap: .15rem; }
+.views { align-items: center; }
+.views button, .views .nav-out {
+  padding: .35rem .7rem; border: 0; border-radius: var(--radius);
+  background: transparent; color: var(--fg-muted);
+  font-family: var(--mono); font-size: .8rem; cursor: pointer;
+  text-decoration: none; white-space: nowrap;
+}
+.views .nav-out:hover { color: var(--fg); }
+.views button:hover { color: var(--fg); }
+.views button[aria-selected="true"] {
+  background: var(--accent); color: #fff;
+}
+:root[data-theme="dark"] .views button[aria-selected="true"],
+:root[data-theme="auto"] .views button[aria-selected="true"] { color: #0d1117; }
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] .views button[aria-selected="true"] { color: #fff; }
+}
+.views button[disabled] { opacity: .4; cursor: not-allowed; }
+
+.theme {
+  background: transparent; border: 1px solid var(--line);
+  border-radius: var(--radius); color: var(--fg-muted);
+  width: 2rem; height: 2rem; cursor: pointer; font-size: 1rem; line-height: 1;
+}
+
+/* ── Overview / project page ──────────────────────────────────────── */
+
+.view-overview { overflow-y: auto; }
+
+/* ── Hero ─────────────────────────────────────────────────────────── */
+
+/* A wash rather than a block of colour: it lifts the hero off the page without
+ * drawing a line the eye has to cross. Behind the content, never over it. */
+.view-overview { position: relative; }
+.view-overview::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 34rem;
+  background:
+    radial-gradient(48rem 22rem at 18% 0%, var(--accent-soft), transparent 70%),
+    radial-gradient(38rem 20rem at 88% 12%, var(--accent-soft), transparent 72%);
+  pointer-events: none;
+}
+.hero, .prose, .methodfig { position: relative; }
+
+.hero {
+  max-width: 68rem; margin: 0 auto;
+  padding: clamp(2.5rem, 7vw, 5rem) 1.5rem clamp(2rem, 4vw, 3.5rem);
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: clamp(2rem, 5vw, 4rem); align-items: center;
+}
+.eyebrow {
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--accent); margin: 0 0 .9rem;
+}
+/* Optional: with nothing to put here the hero starts at the title rather than
+   opening with an empty line's worth of space. */
+.eyebrow:empty { display: none; }
+.hero h1 {
+  font-size: clamp(2.1rem, 4.6vw, 3.1rem); margin: 0;
+  letter-spacing: -0.03em; line-height: 1.02; font-weight: 650;
+}
+.hero-sub {
+  font-size: clamp(1.15rem, 2.1vw, 1.5rem); font-weight: 400;
+  color: var(--fg-muted); margin: .55rem 0 0; letter-spacing: -0.015em;
+  text-wrap: balance;
+}
+/* The subtitle *is* the thesis, so the destination half of it carries the
+   accent and the weight. Marked up in project.json, not hard-coded here. */
+.hero-sub strong { color: var(--accent); font-weight: 650; }
+.hero-tagline {
+  font-size: .95rem; color: var(--fg-muted); margin: 1.1rem 0 0;
+  max-width: 34rem; line-height: 1.65;
+}
+.hero-authors {
+  font-size: .82rem; color: var(--fg-faint); margin: 1.25rem 0 0;
+}
+
+/* Terminal-style calls to action: the project is a CLI tool, and the prompt
+ * glyph says so without a paragraph of explanation. */
+.cta { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1.6rem; }
+.cta .btn, .btn { font-family: var(--mono); font-size: .82rem; text-decoration: none; }
+.cta .btn { padding: .45rem .9rem; }
+
+/* ── The loop, at a glance, in the hero ───────────────────────────── */
+
+/* The coarsest possible statement of the method, and the only job it has is to
+ * be readable in a second. The paper's own figure under "How it works" says all
+ * of this properly — this is the sentence, that is the paragraph. */
+.loopfig { margin: 0; display: flex; flex-direction: column; align-items: stretch; }
+.loop {
+  display: grid; grid-template-columns: 1fr auto 1fr; gap: .6rem; align-items: stretch;
+}
+.loop-box {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-raised); padding: .7rem .8rem;
+  display: flex; flex-direction: column; gap: .3rem;
+}
+.loop-state { border-color: var(--line-strong); }
+.loop-tag {
+  font-family: var(--mono); font-size: .6rem; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--fg-faint);
+}
+.loop-box strong { font-size: .95rem; letter-spacing: -0.01em; }
+.loop-mini { list-style: none; margin: .15rem 0 0; padding: 0; display: grid; gap: .2rem; }
+.loop-mini li {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .74rem; color: var(--fg-muted);
+}
+.loop-note { font-size: .72rem; color: var(--fg-faint); margin: .1rem 0 0; line-height: 1.45; }
+
+.loop-link {
+  display: flex; flex-direction: column; justify-content: center; gap: .5rem;
+  min-width: 7.5rem;
+}
+.loop-arrow {
+  font-family: var(--mono); font-size: .62rem; color: var(--accent);
+  text-align: center; line-height: 1.2; position: relative; padding: .25rem 0;
+}
+.loop-arrow::before {
+  content: ""; position: absolute; left: 0; right: 0; height: 1px;
+  background: var(--accent); opacity: .3;
+}
+.loop-arrow.to-env::before { bottom: 0; }
+.loop-arrow.to-state::before { top: 0; }
+
+/* A miniature of the coverage ribbon the run view draws for real: filled where
+ * the agent looked, empty where it never did. */
+.loop-cov { display: flex; gap: 2px; height: 6px; margin: .3rem 0 .1rem; }
+.loop-cov i { background: var(--line); border-radius: 1px; }
+.loop-cov i.on { background: var(--accent); opacity: .5; }
+
+.loop-exit {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .55rem 0 .55rem .5rem;
+}
+.loop-down { color: var(--accent); font-size: 1rem; line-height: 1; }
+.loop-when { font-family: var(--mono); font-size: .62rem; color: var(--fg-faint); }
+.loop-out { border-style: dashed; }
+
+/* ── The method figure ────────────────────────────────────────────── */
+
+/* Sits in the prose column rather than breaking out of it. The figure is an
+ * overview here, not a reading surface — anyone who needs the small print has
+ * the paper one click away in the hero. */
+.methodfig { margin: 1.6rem 0 0; max-width: 100%; }
+.methodfig[hidden] { display: none; }
+/* The figure carries its own light palette from the paper, so it keeps a light
+ * surface in both themes rather than being inverted — an inverted diagram
+ * misreports its own status colours. The frame stops it glaring in the dark. */
+.figframe {
+  background: #ffffff; border: 1px solid var(--line);
+  border-radius: var(--radius); padding: clamp(.4rem, 1.5vw, .9rem);
+  overflow-x: auto; overscroll-behavior-x: contain;
+}
+:root[data-theme="dark"] .figframe { border-color: var(--line-strong); }
+.figframe img {
+  display: block; width: 100%; height: auto;
+  /* Only a floor for narrow screens: on a phone the frame scrolls instead of
+     shrinking the figure into an unreadable postage stamp. */
+  min-width: 480px;
+}
+/* One line. A caption that wraps reads as a paragraph and competes with the
+ * figure, so it is short enough and unconstrained enough to stay single. */
+.methodfig figcaption {
+  font-size: .76rem; color: var(--fg-faint); margin-top: .6rem;
+  line-height: 1.4;
+}
+.methodfig figcaption strong { color: var(--fg-muted); font-weight: 600; }
+
+.points { margin-top: 2rem; }
+
+/* ── Method highlights ────────────────────────────────────────────── */
+
+/* Three across, one row. A two-column grid would leave the third card beside a
+ * hole, and there is no honest fourth feature to fill it with. */
+.points {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;
+}
+.point-card {
+  border: 1px solid var(--line); border-top: 3px solid var(--accent);
+  border-radius: var(--radius); background: var(--bg-raised);
+  padding: 1.1rem 1.15rem 1.15rem;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.point-card:hover { border-color: var(--accent-line); transform: translateY(-2px); }
+.pc-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; border-radius: 50%;
+  background: var(--accent-mid); color: var(--accent);
+  font-size: 1.05rem; line-height: 1; margin-bottom: .6rem;
+}
+.point-card h3 {
+  font-size: 1.05rem; margin: 0 0 .5rem; letter-spacing: -0.02em;
+  color: var(--accent);
+}
+.point-card p { font-size: .875rem; margin: 0; line-height: 1.62; color: var(--fg-muted); }
+.point-card code {
+  background: var(--bg-sunken); border-radius: 3px; padding: .02rem .3rem;
+  color: var(--fg);
+}
+.point-card strong, .contrast-col strong, .kind strong,
+.block p strong, .hero-tagline strong, .runcard strong {
+  color: var(--fg); font-weight: 600;
+}
+
+/* ── Prose ────────────────────────────────────────────────────────── */
+
+.prose { max-width: 54rem; margin: 0 auto; padding: 0 1.5rem 6rem; }
+.block { margin-top: clamp(3rem, 6vw, 4.5rem); }
+.block > h2, .runcard > h2 {
+  font-size: 1.35rem; margin: 0 0 .9rem; letter-spacing: -0.02em;
+  display: flex; align-items: center; gap: .65rem;
+}
+.block > h2 .num, .runcard > h2 .num {
+  font-family: var(--mono); font-size: .68rem; font-weight: 600;
+  letter-spacing: .06em; color: var(--accent);
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 999px; padding: .12rem .5rem; line-height: 1.5;
+}
+.block p { color: var(--fg-muted); }
+.block .lede { font-size: .97rem; color: var(--fg-muted); line-height: 1.7; }
+
+.contrast {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem;
+}
+.contrast-col {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1rem 1.1rem; background: var(--bg-raised);
+}
+.contrast-col h3 {
+  font-size: .8rem; margin: 0 0 .5rem; text-transform: uppercase;
+  letter-spacing: .07em;
+}
+.contrast-col p { font-size: .875rem; margin: 0; line-height: 1.62; }
+/* Neutral: these are two approaches, not two verdicts — status hues stay
+ * reserved for actual claim and question statuses. */
+.contrast-col h3.bad { color: var(--fg-faint); }
+.contrast-col h3.good { color: var(--accent); }
+.contrast-col:first-child { background: transparent; border-style: dashed; }
+.contrast-col:last-child {
+  border-color: var(--accent-line); background: var(--accent-soft);
+}
+.contrast-col h3 { font-size: .85rem; }
+
+.kinds {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 1rem; margin: 1.5rem 0 1.25rem;
+}
+.kind {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1rem 1.1rem; background: var(--bg-raised);
+}
+.kind .eid {
+  font-size: 1rem; padding: .18rem .6rem;
+  background: var(--accent-mid); color: var(--accent);
+}
+.kind h3 {
+  font-family: var(--mono); font-size: .9rem; font-weight: 600;
+  margin: .6rem 0 .35rem; letter-spacing: 0;
+}
+.kind p { font-size: .875rem; margin: 0; line-height: 1.62; }
+
+/* One claim, at display size. The page argues for evidence-backed review in a
+ * lot of small type; this is the sentence it all reduces to, and it earns the
+ * only piece of large type outside the hero. */
+.highlight {
+  margin: clamp(3rem, 6vw, 4.5rem) 0 0;
+  padding: 1.5rem 0 1.5rem 1.75rem;
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft), transparent 70%);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.highlight p {
+  margin: 0; font-size: clamp(1.15rem, 2.3vw, 1.5rem);
+  line-height: 1.4; letter-spacing: -0.02em; color: var(--fg) !important;
+  text-wrap: balance;
+}
+.highlight strong { color: var(--accent); font-weight: 650; }
+.highlight .highlight-note {
+  font-size: .82rem; color: var(--fg-muted); margin-top: .7rem;
+  letter-spacing: 0; line-height: 1.55;
+}
+
+/* The demo is the point of the page, so its section is a card rather than one
+ * more stretch of prose. */
+.runcard {
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--bg-raised); padding: 1.5rem 1.6rem 1.3rem;
+}
+.runcard p { margin: 0; }
+.runcard-cta { margin: 1.2rem 0 1rem !important; }
+.runcard .btn-primary { padding: .5rem 1rem; font-size: .85rem; }
+
+.install { display: grid; gap: 1rem; margin-top: 1.5rem; }
+.install-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 1rem 1.1rem; background: var(--bg-raised);
+}
+.install-card h3 {
+  font-size: .85rem; margin: 0 0 .25rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--accent);
+}
+.install-card .caption { margin: 0 0 .7rem; }
+.install-card .cmd { margin: 0; max-height: none; }
+
+.bibtex {
+  font-family: var(--mono); font-size: .76rem; line-height: 1.6;
+  background: var(--bg-sunken); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1rem 1.1rem; overflow-x: auto;
+  color: var(--fg-muted); white-space: pre; margin-top: 1.5rem;
+}
+
+/* ── Views ────────────────────────────────────────────────────────── */
+
+main { height: calc(100dvh - var(--topbar-h)); }
+@supports not (height: 100dvh) { main { height: calc(100vh - var(--topbar-h)); } }
+
+.view[hidden] { display: none; }
+.view { height: 100%; }
+.view-review { overflow-y: auto; }
+.view-overview .prose p { font-size: .95rem; }
+
+.view-intro, .doc {
+  max-width: var(--wrap); margin: 0 auto; padding: 1.75rem 1.25rem .5rem;
+}
+.doc { padding-bottom: 4rem; max-width: 52rem; }
+.doc h2 { font-size: 1.5rem; margin: 0 0 .4rem; }
+.doc h3 { font-size: 1.05rem; margin: 2rem 0 .4rem; }
+.lede { color: var(--fg-muted); font-size: 1.02rem; }
+.caption { color: var(--fg-faint); font-size: .85rem; }
+.view-intro h2 { font-size: 1.35rem; margin: 0 0 .4rem; }
+.view-intro p { color: var(--fg-muted); margin: 0 0 .9rem; }
+
+/* ── Watch a run ──────────────────────────────────────────────────── */
+
+/* Two standing objects and a step that moves between them: the log on the left
+ * is what the agent knows and it only ever grows; the paper on the right is
+ * fixed and the run moves through it. Every step is one direction or the other,
+ * and the page's job is to make which one obvious without being read. */
+.view-watch { display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
+
+/* Two selectors — paper, then model — then the trajectory below. */
+.selectors {
+  display: flex; align-items: flex-end; gap: 1.25rem; flex-wrap: wrap;
+  padding: .8rem 1rem .7rem; border-bottom: 1px solid var(--line);
+}
+.selector { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.selector label {
+  font-family: var(--mono); font-size: .68rem; color: var(--fg-faint);
+  letter-spacing: .04em;
+}
+.selector select {
+  font-family: var(--mono); font-size: .82rem; color: var(--fg);
+  background: var(--bg-raised); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); padding: .35rem 1.8rem .35rem .6rem;
+  max-width: 34rem; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 0.85rem center, right 0.6rem center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.selector select:disabled { cursor: default; opacity: .75; }
+.selector-meta {
+  display: flex; flex-direction: column; gap: .2rem;
+  margin-left: auto; align-items: flex-end;
+}
+
+.watch-controls { background: var(--bg); }
+
+.runhead {
+  display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+  padding: .5rem 1rem 0;
+}
+.section-rule {
+  margin: 0;
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-faint); font-weight: 600;
+}
+
+.selector-meta .caption { margin: 0; font-size: .74rem; text-align: right; }
+/* Stats read as one instrument line rather than a band of big numbers: the
+   vertical budget above the panes is the scarce resource here. */
+.runstats { display: flex; gap: .9rem; margin: 0; font-family: var(--mono); }
+.runstat { display: flex; align-items: baseline; gap: .25rem; }
+.runstat dt { font-size: .8rem; font-weight: 600; }
+.runstat dd { margin: 0; font-size: .66rem; color: var(--fg-faint); }
+
+/* Without a transcript there is nothing to scrub; remove the controls and the
+   two step-scoped bands rather than show a dead scrubber and two empty boxes.
+   `display:none` also suppresses counter-increment, so the log and the review
+   renumber themselves to 1 and 2 instead of leaving holes at 1 and 2. */
+body[data-hasrun="0"] .runbar,
+body[data-hasrun="0"] .rail-wrap,
+body[data-hasrun="0"] .channel,
+body[data-hasrun="0"] .statusbar,
+body[data-hasrun="0"] .cov-bar { display: none; }
+
+.runbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: .35rem 1rem .3rem; flex-wrap: wrap;
+}
+.runbar-left { display: flex; align-items: center; gap: .4rem; }
+.btn {
+  font: inherit; font-size: .85rem; padding: .3rem .7rem; cursor: pointer;
+  background: var(--bg-raised); color: var(--fg);
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+}
+.btn:hover { border-color: var(--fg-faint); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+:root[data-theme="dark"] .btn-primary { color: #0d1117; }
+.stepnum {
+  font-family: var(--mono); font-size: .8rem; color: var(--fg-muted);
+  min-width: 5.5rem; text-align: center;
+}
+
+.notable-btn {
+  font: inherit; font-size: .78rem; cursor: pointer;
+  background: var(--bg-sunken); color: var(--fg-muted);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: .15rem .6rem; margin-left: .35rem;
+}
+.notable-btn:hover { color: var(--fg); border-color: var(--line-strong); }
+.notable-lead { font-size: .78rem; color: var(--fg-faint); }
+
+/* The rail is the timeline and the scrubber at once. Tick height encodes how
+ * much a step changed, so the read / log / read rhythm is visible as a shape
+ * before anyone reads a label. */
+.rail-wrap { padding: 0 1rem .35rem; }
+.chapters { display: flex; gap: 1px; margin-bottom: 3px; }
+.chapter {
+  font-size: .62rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--fg-faint); background: var(--bg-sunken);
+  padding: .1rem .4rem; border-radius: 3px; white-space: nowrap; overflow: hidden;
+}
+.rail {
+  position: relative; display: flex; align-items: flex-end;
+  height: 34px; padding: 0 2px; cursor: pointer;
+  background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.ticks { display: flex; align-items: flex-end; gap: 1px; margin: 0; padding: 0; list-style: none; width: 100%; height: 100%; }
+.tick {
+  flex: 1 1 0; min-width: 3px; position: relative;
+  height: calc(6px + var(--mut, 0) * 3.2px);
+  background: var(--line-strong); border-radius: 1px 1px 0 0;
+  align-self: flex-end;
+}
+.tick[data-kind="read"] { background: transparent; border: 1px solid var(--line-strong); }
+.tick[data-kind="setup"] { background: var(--line); }
+.tick[data-kind="review"] { background: var(--accent); opacity: .55; }
+.tick[data-mark]::before {
+  content: attr(data-glyph); position: absolute; top: -13px; left: 50%;
+  transform: translateX(-50%); font-size: .7rem; color: var(--fg-muted);
+}
+.tick[data-on="1"] { background: var(--accent); opacity: 1; box-shadow: 0 0 0 1px var(--accent); }
+.tick[data-past="1"]:not([data-on="1"]) { opacity: .85; }
+.tick[data-past="0"] { opacity: .35; }
+.rail-help { margin: .2rem 0 0; font-size: .68rem; color: var(--fg-faint); }
+/* Dotted underline: this is a statement about what is *not* on screen, and it
+ * has a tooltip explaining which steps and why. */
+.rail-trim { border-bottom: 1px dotted currentColor; cursor: help; }
+
+/* ── The channel: the step, between the two things it connects ────── */
+
+/* It sits *between* the log and the paper because that is what it describes —
+ * a move from one to the other. Reading left to right across the three columns
+ * is reading the step: this state, this action, that evidence. */
+.channel {
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: .7rem .7rem 2rem; background: var(--bg-sunken);
+  display: flex; flex-direction: column; gap: .3rem;
+}
+/* Unmissable, and the one thing on the page that must be readable at a glance:
+ * a big glyph pointing at whichever column is about to change. */
+.act-arrow {
+  font-size: 1.6rem; line-height: 1; color: var(--line-strong);
+  text-align: center; margin-bottom: .1rem;
+}
+.channel[data-dir="fetch"] .act-arrow,
+.channel[data-dir="compose"] .act-arrow { color: var(--accent); text-align: right; }
+.channel[data-dir="write"] .act-arrow { color: var(--accent); text-align: left; }
+
+.act-dir {
+  font-family: var(--mono); font-size: .68rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em;
+  color: var(--fg-muted); margin: 0;
+}
+.channel[data-dir="fetch"] .act-dir,
+.channel[data-dir="write"] .act-dir,
+.channel[data-dir="compose"] .act-dir { color: var(--accent); }
+.act-what {
+  font-family: var(--mono); font-size: .74rem; color: var(--fg); margin: 0;
+  overflow-wrap: anywhere;
+}
+.act-for { font-size: .74rem; color: var(--fg-muted); margin: 0; }
+.acts { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .2rem; }
+.channel .say {
+  margin: .3rem 0 0; font-size: .78rem; border-left-width: 2px; padding-left: .5rem;
+}
+.channel .step-err { margin: .3rem 0 0; font-size: .7rem; }
+.channel .rawcmd { margin-top: .3rem; }
+
+/* ── The two columns ──────────────────────────────────────────────── */
+
+/* min-height:0 on the grid and on every column, or they grow to fit their
+ * content instead of scrolling and the split silently stops working. */
+/* state | action | environment — the reading order is the claim. */
+.split {
+  position: relative;
+  display: grid; min-height: 0;
+  grid-template-columns:
+    minmax(280px, 1fr) clamp(190px, 18vw, 280px) minmax(320px, 1.05fr);
+  gap: 1px; background: var(--line); border-top: 1px solid var(--line);
+}
+body[data-hasrun="0"] .split { grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.05fr); }
+
+/* The wire layer spans both columns and sits above them. It must never take a
+ * click: the entries and paper lines underneath are the interactive things. */
+.wires {
+  position: absolute; inset: 0; z-index: 3;
+  pointer-events: none; overflow: visible;
+  color: var(--accent);
+}
+.wire { fill: none; stroke: currentColor; stroke-width: 1.5; }
+/* A wire whose endpoint is scrolled out of its column is drawn to the edge it
+ * left through and faded, rather than to a position that is not on screen. */
+.wire[data-clip="1"] { stroke-dasharray: 3 3; opacity: .5; }
+.wire-dot { fill: currentColor; }
+.col {
+  display: grid; grid-template-rows: auto auto 1fr;
+  min-height: 0; background: var(--bg);
+  border-top: 2px solid transparent;
+}
+.col[data-active="1"] { border-top-color: var(--accent); background: var(--bg-touch); }
+.col[data-active="1"] .col-body { background: var(--bg); }
+.col-h {
+  margin: 0; padding: .45rem .8rem; font-size: .74rem;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--fg-faint);
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; gap: .5rem; align-items: center;
+}
+.col-note {
+  font-family: var(--mono); font-size: .7rem; text-transform: none;
+  letter-spacing: 0; text-align: right;
+}
+.col-sub { font-family: var(--mono); font-size: .7rem; color: var(--fg-faint); margin: .6rem 0 0; }
+.col-body {
+  position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 0 .8rem 2rem;
+}
+.col-body[hidden] { display: none; }
+.col-log .statusbar { margin: 0; padding: .4rem .8rem; border-bottom: 1px solid var(--line); }
+
+.srctabs { display: flex; gap: .15rem; }
+.srctabs button {
+  font: inherit; font-family: var(--mono); font-size: .7rem; cursor: pointer;
+  text-transform: none; letter-spacing: 0; position: relative;
+  padding: .1rem .5rem; border-radius: var(--radius);
+  border: 1px solid transparent; background: transparent; color: var(--fg-faint);
+}
+.srctabs button:hover { color: var(--fg); }
+.srctabs button[aria-selected="true"] {
+  background: var(--bg-sunken); border-color: var(--line); color: var(--fg);
+}
+/* The review filling up while you are looking at the paper is worth knowing
+ * about; switching the tab out from under you is not. */
+.srctabs button[data-dot="1"]::after {
+  content: ""; position: absolute; top: .1rem; right: .12rem;
+  width: .35rem; height: .35rem; border-radius: 50%; background: var(--accent);
+}
+
+/* ── The paper, whole ─────────────────────────────────────────────── */
+
+/* The entire paper is rendered once and never rebuilt; a step only re-marks the
+ * ~70 lines entering and leaving the current range. That is what makes the
+ * never-opened regions showable — they are the lines that are simply still
+ * there, faint, between the passages the run did visit. */
+.pline { display: flex; gap: .6rem; padding: 0 .15rem; scroll-margin-top: 3rem; }
+.pline .n {
+  font-family: var(--mono); font-size: .64rem; color: var(--fg-faint);
+  min-width: 2.6rem; text-align: right; user-select: none; flex: none;
+  padding-top: .18rem;
+}
+.pline .tx {
+  font-family: var(--serif); font-size: .82rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.pline[data-cov="0"] { opacity: .32; }
+.pline[data-h="1"] .tx { font-weight: 650; }
+.pline[data-now="1"], .pline[data-now="first"], .pline[data-now="last"] {
+  background: var(--bg-touch); opacity: 1;
+}
+.pline[data-now="1"] .n, .pline[data-now="first"] .n, .pline[data-now="last"] .n {
+  color: var(--accent);
+}
+.pline[data-now="first"] { box-shadow: inset 0 1px 0 var(--accent); }
+.pline[data-now="last"] { box-shadow: inset 0 -1px 0 var(--accent); }
+/* Arrived here by following a citation, rather than by the run passing through.
+ * A different mark, because it answers a different question. */
+.pline[data-cited="1"] { opacity: 1; box-shadow: inset 2px 0 0 var(--st-weak); }
+.pline[data-cited="1"] .n { color: var(--st-weak); }
+
+.srclink {
+  font-family: var(--mono); font-size: .68rem; cursor: pointer;
+  background: transparent; color: var(--fg-faint);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 .3rem;
+  margin-right: .15rem;
+}
+.srclink:hover { color: var(--accent); border-color: var(--accent); }
+.srclink::after { content: " ↗"; opacity: .6; }
+
+.paper-empty { color: var(--fg-faint); font-size: .85rem; padding: 1rem 0; font-style: italic; }
+
+/* ── The step's commands, as chips in the action bar ──────────────── */
+
+.act {
+  display: inline-flex; align-items: baseline; gap: .3rem;
+  font-family: var(--mono); font-size: .68rem; cursor: pointer;
+  padding: .05rem .4rem; border-radius: 3px;
+  border: 1px solid var(--line); background: var(--bg-raised); color: var(--fg-muted);
+}
+.act:hover { border-color: var(--line-strong); color: var(--fg); }
+.act[data-v="add"] { border-color: var(--accent); color: var(--accent); }
+.act .a-op { color: var(--fg-faint); }
+.aim {
+  display: inline-flex; align-items: center; gap: .2rem;
+  font-family: var(--mono); font-size: .68rem; cursor: pointer;
+  padding: .05rem .35rem; border-radius: 3px;
+  border: 1px solid var(--accent); background: var(--bg-touch); color: var(--accent);
+}
+
+.step-label { font-family: var(--mono); font-size: .82rem; margin: 0 0 .3rem; }
+.step-kind {
+  display: inline-block; font-size: .65rem; text-transform: uppercase;
+  letter-spacing: .06em; padding: .05rem .4rem; border-radius: 3px;
+  background: var(--bg-sunken); color: var(--fg-muted); margin-right: .4rem;
+}
+.step-kind[data-status="error"], .step-kind[data-status="rejected"] {
+  color: var(--st-invalid); background: transparent; border: 1px solid currentColor;
+}
+.say {
+  font-size: .93rem; border-left: 2px solid var(--line-strong);
+  padding-left: .7rem; margin: .6rem 0; color: var(--fg);
+}
+.say em { color: var(--fg-muted); }
+.step-err {
+  font-family: var(--mono); font-size: .76rem; white-space: pre-wrap;
+  color: var(--st-invalid); background: var(--bg-sunken);
+  padding: .5rem .6rem; border-radius: var(--radius); margin: .5rem 0;
+}
+.cmd {
+  font-family: var(--mono); font-size: .74rem; white-space: pre-wrap;
+  color: var(--fg-muted); background: var(--bg-sunken);
+  padding: .5rem .6rem; border-radius: var(--radius); margin: .5rem 0 0;
+  max-height: 11rem; overflow: auto;
+}
+/* A thin map of the whole paper across the top of the right column: filled
+ * where the run opened it, empty where it never did, with a marker for where
+ * this step is. Only showable because the entire paper is inlined. */
+.cov-bar {
+  position: relative;
+  display: flex; height: 6px; overflow: hidden;
+  background: var(--bg-sunken); border-bottom: 1px solid var(--line);
+}
+.cov-seg[data-read="1"] { background: var(--accent); opacity: .4; }
+.cov-seg[data-read="0"] { background: transparent; }
+.cov-now {
+  position: absolute; top: 0; bottom: 0; min-width: 2px;
+  background: var(--accent);
+}
+.cov-now[hidden] { display: none; }
+
+.rawcmd { margin-top: .5rem; }
+.rawcmd summary { cursor: pointer; color: var(--fg-faint); font-size: .72rem; font-family: var(--mono); }
+.rawcmd .cmd { max-height: none; }
+
+/* ── Entries ──────────────────────────────────────────────────────── */
+
+.entry {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-raised); padding: .55rem .65rem; margin-bottom: .5rem;
+}
+.entry[data-present="0"] { display: none; }
+.entry[data-touch="1"] {
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--bg-touch);
+}
+.entry[data-touch="1"]::after {
+  content: "changed here"; float: right; font-family: var(--mono);
+  font-size: .62rem; color: var(--accent); text-transform: uppercase;
+  letter-spacing: .05em;
+}
+/* The entries that sent the agent to this passage. Named by the agent itself
+ * before it read, so this is the log visibly steering the step — and it is
+ * marked in the log rather than in a panel of its own, because the agenda is
+ * not a separate object from the log. */
+.entry[data-aim="1"] { border-color: var(--accent); }
+.entry[data-aim="1"][data-touch="0"] .eid { background: var(--bg-touch); color: var(--accent); }
+.entry[data-aim="1"][data-touch="0"]::after {
+  content: "went looking for this"; float: right; font-family: var(--mono);
+  font-size: .62rem; color: var(--accent); text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.entry-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.eid {
+  font-family: var(--mono); font-size: .76rem; font-weight: 600;
+  padding: .02rem .3rem; border-radius: 3px;
+  background: var(--bg-sunken); color: var(--fg-muted);
+}
+.sec { font-family: var(--mono); font-size: .68rem; color: var(--fg-faint); }
+.entry-text { margin: .4rem 0 0; font-size: .88rem; }
+.entry-type {
+  font-size: .64rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--fg-faint);
+}
+
+/* Status: glyph + word + border-style. Three channels, so the meaning survives
+ * greyscale and the common colour-vision deficiencies. */
+.chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-family: var(--mono); font-size: .68rem;
+  padding: .02rem .4rem; border-radius: 3px;
+  color: var(--st-unknown); border: 1px solid currentColor;
+}
+.chip .g { font-weight: 700; width: .8em; text-align: center; }
+.chip[data-status="supported"], .chip[data-status="resolved"] {
+  color: var(--st-supported); border-style: solid;
+}
+.chip[data-status="weak"], .chip[data-status="partially_answered"] {
+  color: var(--st-weak); border-style: dashed;
+}
+.chip[data-status="invalid"] { color: var(--st-invalid); border-width: 2px; }
+.chip[data-status="to_be_verified"], .chip[data-status="open"] {
+  color: var(--st-unknown); border-style: dotted;
+}
+.chip-was { opacity: .5; }
+.chip-arrow { color: var(--fg-faint); font-size: .7rem; }
+
+.mark {
+  font-family: var(--mono); font-size: .64rem; padding: .02rem .35rem;
+  border-radius: 3px; border: 1px solid var(--line-strong); color: var(--fg-muted);
+}
+.mark[data-change="retraction"] { border-color: var(--st-weak); color: var(--st-weak); }
+
+/* The spine shows at a glance that an entry changed more than once, and each
+ * pip is a jump to the step where it changed. */
+.spine { display: flex; gap: 2px; margin: 0 0 0 auto; padding: 0; list-style: none; }
+.spine button {
+  width: 1.05rem; height: 1.05rem; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: .62rem; line-height: 1;
+  border: 1px solid currentColor; border-radius: 50%;
+  background: var(--bg); color: var(--st-unknown);
+}
+.spine button[data-status="supported"], .spine button[data-status="resolved"] { color: var(--st-supported); }
+.spine button[data-status="weak"] { color: var(--st-weak); }
+.spine button[data-status="invalid"] { color: var(--st-invalid); }
+.spine button[data-on="1"] { background: currentColor; }
+.spine button[data-on="1"]::first-line { color: var(--bg); }
+
+.rev { margin-top: .45rem; }
+.rev[hidden] { display: none; }
+.rev-body { font-size: .84rem; color: var(--fg-muted); margin: .25rem 0 0; }
+.rev-srcs { font-family: var(--mono); font-size: .68rem; color: var(--fg-faint); margin-top: .2rem; }
+.tagbadge {
+  display: inline-block; font-family: var(--mono); font-size: .62rem;
+  letter-spacing: .05em; padding: .02rem .35rem; border-radius: 3px;
+  background: var(--bg-sunken); color: var(--fg-muted); margin-right: .35rem;
+}
+.superseded { margin-top: .4rem; font-size: .8rem; }
+.superseded summary { cursor: pointer; color: var(--fg-faint); font-size: .74rem; }
+/* Hatched and muted rather than struck through: 800 struck-through characters
+ * are unreadable, and the point is that it can still be read. */
+.superseded .old {
+  margin-top: .3rem; padding: .35rem .6rem; color: var(--fg-faint);
+  border-left: 3px solid var(--line-strong);
+  background: repeating-linear-gradient(45deg,
+      transparent, transparent 5px, var(--bg-sunken) 5px, var(--bg-sunken) 10px);
+}
+.issues { margin: .35rem 0 0; padding-left: 1rem; font-size: .8rem; color: var(--fg-muted); }
+.issues li { margin: .1rem 0; }
+
+.orphan-badge {
+  font-family: var(--mono); font-size: .62rem; color: var(--st-weak);
+  border: 1px dashed currentColor; border-radius: 3px; padding: .02rem .35rem;
+}
+
+/* ── Status aggregate bar ─────────────────────────────────────────── */
+
+.statusbar { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.sb-item { display: flex; align-items: center; gap: .25rem; font-family: var(--mono); font-size: .68rem; }
+.sb-swatch { width: .6rem; height: .6rem; border: 1px solid currentColor; border-radius: 2px; }
+.sb-item[data-zero="1"] { opacity: .4; }
+
+/* ── Review points ────────────────────────────────────────────────── */
+
+.point {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-raised); padding: .55rem .65rem; margin-bottom: .5rem;
+}
+.point[data-present="0"] { display: none; }
+.point-h { display: flex; align-items: center; gap: .4rem; margin-bottom: .3rem; }
+.point-sec {
+  font-size: .64rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--fg-faint);
+}
+.point-text { font-size: .86rem; margin: 0; }
+/* Clamp only while the run is mid-replay, where the pane is a progress
+   indicator; at the end it is the review itself and must be readable. */
+body[data-playing="1"] #review-pane .point-text {
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cites { display: flex; gap: .25rem; flex-wrap: wrap; margin-top: .4rem; }
+.cite {
+  font-family: var(--mono); font-size: .66rem; cursor: pointer;
+  background: var(--bg-sunken); color: var(--fg-muted);
+  border: 1px solid var(--line); border-radius: 3px; padding: .02rem .35rem;
+}
+.cite:hover { color: var(--fg); border-color: var(--line-strong); }
+
+.empty { color: var(--fg-faint); font-size: .85rem; font-style: italic; padding: 1rem 0; }
+
+/* Cross-highlighting, both directions. */
+.entry[data-sel="1"], .point[data-sel="1"] {
+  border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+}
+.entry[data-rel="1"], .point[data-rel="1"] { border-color: var(--accent); }
+body[data-focus]:not([data-focus=""]) .entry[data-rel="0"][data-sel="0"],
+body[data-focus]:not([data-focus=""]) .point[data-rel="0"][data-sel="0"] { opacity: .35; }
+
+/* ── The review, at the end of the chain that produced it ─────────── */
+
+.uncited-note {
+  margin: 0 0 .8rem; font-size: .85rem; color: var(--fg-muted);
+  border-left: 2px solid var(--line-strong); padding-left: .7rem;
+}
+.uncited-note:empty { display: none; }
+
+.rv-section { margin-top: 1.75rem; }
+.rv-section:first-child { margin-top: 0; }
+.rv-section h3 {
+  margin: 0 0 .6rem; font-size: .95rem;
+  padding-bottom: .25rem; border-bottom: 1px solid var(--line);
+}
+.summary-text { font-size: .95rem; }
+.score-line { font-family: var(--mono); font-size: .9rem; color: var(--fg-muted); }
+.score-box {
+  margin-top: 1.5rem; padding-top: .8rem; border-top: 1px solid var(--line);
+}
+.score-box[hidden] { display: none; }
+.score-box h3 {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--fg-faint); margin: 0 0 .2rem;
+}
+
+/* The compact legend inside the run, in place of a separate explainer tab. */
+.legend-strip { margin: 0 0 .7rem; font-size: .82rem; }
+.legend-strip summary { cursor: pointer; color: var(--fg-faint); font-size: .76rem; }
+.legend-strip p { color: var(--fg-muted); margin: .4rem 0; }
+.legend-strip .eid { font-size: .7rem; }
+.chips { display: flex; gap: .4rem; flex-wrap: wrap; margin: .5rem 0; }
+.chips .chip[data-zero="1"] { opacity: .4; }
+
+/* ── Footer ───────────────────────────────────────────────────────── */
+
+.footer { border-top: 1px solid var(--line); padding: 1rem 1.25rem 2rem; background: var(--bg-sunken); }
+.fine { color: var(--fg-faint); font-size: .78rem; max-width: var(--wrap); margin: .4rem auto; }
+.warn {
+  max-width: var(--wrap); margin: 0 auto .4rem; font-size: .8rem;
+  color: var(--st-weak); border: 1px dashed currentColor;
+  border-radius: var(--radius); padding: .4rem .6rem;
+}
+
+/* ── Visual refinement ───────────────────────────────────────────── */
+/* The page reads like a research instrument: calm paper-white surfaces,
+ * concentrated cobalt navigation, and just enough depth to make the live
+ * replay feel tangible. Status colours remain reserved for status. */
+
+body { letter-spacing: -.003em; }
+
+.topbar {
+  gap: clamp(.75rem, 2vw, 1.5rem);
+  padding: 0 clamp(1rem, 3vw, 2.5rem);
+  background: color-mix(in srgb, var(--bg-raised) 88%, transparent);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  box-shadow: 0 1px 0 var(--line), 0 8px 24px rgba(23, 35, 58, .035);
+}
+.brand { position: relative; padding-left: 1rem; }
+.brand::before {
+  content: ""; position: absolute; left: 0; top: .22rem; bottom: .18rem; width: 3px;
+  border-radius: 99px; background: linear-gradient(var(--accent), color-mix(in srgb, var(--accent) 42%, transparent));
+}
+.brand-name { font-size: .97rem; letter-spacing: -.025em; }
+.brand-sub { margin-top: .1rem; letter-spacing: .025em; }
+.views {
+  gap: .2rem; padding: .22rem; border: 1px solid var(--line);
+  border-radius: 999px; background: color-mix(in srgb, var(--bg-sunken) 78%, transparent);
+}
+.views button, .views .nav-out { padding: .34rem .72rem; border-radius: 999px; }
+.views button[aria-selected="true"] {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 74%, #5b8dff));
+  box-shadow: 0 3px 9px var(--accent-mid);
+}
+.theme {
+  width: 2.25rem; height: 2.25rem; border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-raised) 82%, transparent);
+  transition: transform .18s ease, border-color .18s ease, color .18s ease;
+}
+.theme:hover { color: var(--accent); border-color: var(--accent-line); transform: rotate(20deg); }
+
+.view-overview::before {
+  height: 50rem;
+  background:
+    radial-gradient(46rem 30rem at 5% 3%, var(--accent-mid), transparent 68%),
+    radial-gradient(40rem 28rem at 98% 12%, var(--accent-soft), transparent 72%);
+}
+.hero {
+  max-width: 76rem;
+  padding: clamp(3.75rem, 8vw, 7rem) 1.5rem clamp(3rem, 5vw, 5rem);
+  gap: clamp(2.5rem, 6vw, 6.5rem);
+}
+.hero-text { max-width: 39rem; }
+.eyebrow {
+  display: flex; align-items: center; gap: .6rem;
+  font-size: .68rem; font-weight: 650; letter-spacing: .15em;
+}
+.eyebrow::before { content: ""; width: 1.85rem; height: 1px; background: currentColor; opacity: .7; }
+.hero h1 {
+  font-size: clamp(3rem, 5.5vw, 5rem); line-height: .98; letter-spacing: -.055em;
+  max-width: 12ch;
+}
+.hero-sub { font-size: clamp(1.22rem, 2.05vw, 1.58rem); line-height: 1.28; margin-top: 1rem; }
+.hero-tagline { max-width: 35rem; font-size: 1rem; line-height: 1.72; }
+.hero-authors { font-size: .82rem; letter-spacing: .015em; }
+.cta { gap: .65rem; margin-top: 1.85rem; }
+.cta .btn, .btn {
+  border-radius: 999px; padding: .52rem .9rem;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.cta .btn:hover, .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.btn-primary, .runcard .btn-primary {
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 76%, #5b8dff));
+  border-color: var(--accent); box-shadow: 0 7px 17px var(--accent-mid);
+}
+
+.loopfig {
+  position: relative; padding: clamp(1.1rem, 2vw, 1.6rem); overflow: hidden;
+  border: 1px solid var(--accent-line); border-radius: var(--radius-lg);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--bg-raised) 92%, var(--accent-soft)), var(--bg-raised));
+  box-shadow: var(--shadow-lg);
+}
+.loopfig::before {
+  content: ""; position: absolute; width: 14rem; height: 14rem; right: -6rem; top: -8rem;
+  border-radius: 50%; background: var(--accent-soft); filter: blur(1px); pointer-events: none;
+}
+.loop, .loop-exit, .loop-out { position: relative; }
+.loop { gap: .8rem; }
+.loop-box {
+  border-radius: 13px; padding: .9rem;
+  background: color-mix(in srgb, var(--bg-raised) 91%, var(--accent-soft));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .25) inset;
+}
+.loop-state { border-color: var(--accent-line); }
+.loop-box strong { font-size: 1rem; }
+.loop-tag { color: var(--accent); font-weight: 650; }
+.loop-mini li { font-size: .76rem; }
+.loop-arrow { color: var(--accent); }
+.loop-out { border-style: solid; border-color: var(--accent-line); }
+
+.prose { max-width: 60rem; padding-bottom: 7rem; }
+.block { margin-top: clamp(4rem, 8vw, 6rem); }
+.block > h2, .runcard > h2 { font-size: clamp(1.45rem, 2vw, 1.8rem); margin-bottom: 1.1rem; }
+.block > h2 .num, .runcard > h2 .num {
+  padding: .16rem .56rem; color: var(--accent); border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 75%, transparent);
+}
+.block .lede { max-width: 52rem; font-size: 1.04rem; line-height: 1.8; }
+
+.points { gap: 1.15rem; }
+.point-card, .kind, .contrast-col, .install-card {
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);
+}
+.point-card {
+  position: relative; overflow: hidden; padding: 1.35rem;
+  border-top: 1px solid var(--line); background: var(--bg-raised);
+}
+.point-card::before {
+  content: ""; position: absolute; width: 5rem; height: 5rem; top: -3rem; right: -2.5rem;
+  border-radius: 50%; background: var(--accent-soft);
+}
+.point-card:hover { border-color: var(--accent-line); box-shadow: var(--shadow); transform: translateY(-4px); }
+.pc-glyph { width: 2.45rem; height: 2.45rem; background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.point-card h3 { color: var(--fg); }
+.point-card p { font-size: .9rem; }
+
+.contrast { gap: 1.15rem; }
+.contrast-col { padding: 1.35rem; }
+.contrast-col:first-child { background: color-mix(in srgb, var(--bg-raised) 65%, transparent); }
+.contrast-col:last-child {
+  background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--bg-raised) 93%, var(--accent-soft)));
+  box-shadow: var(--shadow);
+}
+.kinds { gap: 1.15rem; }
+.kind { padding: 1.25rem; }
+.kind .eid { border-radius: 999px; }
+
+.highlight {
+  position: relative; overflow: hidden; padding: clamp(1.7rem, 4vw, 2.5rem);
+  border: 1px solid var(--accent-line); border-left: 5px solid var(--accent);
+  border-radius: var(--radius-lg); background: linear-gradient(120deg, var(--accent-soft), color-mix(in srgb, var(--bg-raised) 96%, var(--accent-soft)));
+  box-shadow: var(--shadow);
+}
+.highlight::after {
+  content: ""; position: absolute; right: -3rem; bottom: -5rem; width: 14rem; height: 14rem;
+  border: 1px solid var(--accent-line); border-radius: 50%; opacity: .75;
+}
+.highlight p, .highlight .highlight-note { position: relative; z-index: 1; }
+.highlight .highlight-note { margin-top: .85rem; }
+
+.runcard {
+  position: relative; overflow: hidden; padding: clamp(1.55rem, 4vw, 2.3rem);
+  border-color: var(--accent-line); border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 75%, var(--bg-raised)), var(--bg-raised));
+  box-shadow: var(--shadow);
+}
+.runcard::after {
+  content: ""; position: absolute; inset: auto -2rem -4rem auto; width: 11rem; height: 11rem;
+  border: 1px solid var(--accent-line); border-radius: 50%; opacity: .6;
+}
+.runcard > * { position: relative; z-index: 1; }
+.install-card { padding: 1.2rem 1.3rem; transition: transform .18s ease, box-shadow .18s ease; }
+.install-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.bibtex { border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
+
+.view-watch {
+  padding: .85rem; background: linear-gradient(180deg, var(--accent-soft), transparent 16rem);
+}
+.selectors {
+  gap: 1.5rem; padding: .95rem 1.1rem; margin: 0;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-raised) 90%, transparent); box-shadow: var(--shadow-sm);
+}
+.selector select { min-height: 2.35rem; border-radius: 9px; box-shadow: 0 1px 1px rgba(23, 35, 58, .03); }
+.watch-controls { margin: .7rem 0 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-raised); box-shadow: var(--shadow-sm); }
+.runhead { padding: .7rem 1rem .05rem; }
+.section-rule { color: var(--accent); }
+.runbar { padding: .55rem 1rem .4rem; }
+.rail-wrap { padding-bottom: .55rem; }
+.rail { height: 38px; border-radius: 9px; }
+.channel { background: linear-gradient(180deg, var(--bg-sunken), var(--bg)); }
+.split {
+  border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden;
+  box-shadow: var(--shadow); background: var(--line);
+}
+.col { background: var(--bg-raised); }
+.col[data-active="1"] { background: var(--bg-touch); }
+.col-h { padding: .65rem .9rem; background: color-mix(in srgb, var(--bg-raised) 86%, var(--accent-soft)); }
+.col-body { padding: 0 .85rem 2rem; }
+.entry, .point { border-radius: 9px; box-shadow: 0 1px 0 rgba(23, 35, 58, .025); }
+.entry:hover, .point:hover { border-color: var(--line-strong); }
+.entry[data-touch="1"] { box-shadow: inset 3px 0 0 var(--accent), var(--shadow-sm); }
+.chip, .act, .aim, .cite, .srclink, .tagbadge { border-radius: 999px; }
+.footer { margin-top: 0; padding: 1.2rem 1.25rem 2.2rem; background: var(--bg-sunken); }
+
+:root[data-theme="dark"] .topbar { box-shadow: 0 1px 0 var(--line), 0 8px 24px rgba(0, 0, 0, .2); }
+:root[data-theme="dark"] .loop-box { box-shadow: 0 1px 0 rgba(255, 255, 255, .035) inset; }
+:root[data-theme="dark"] .point-card::before { opacity: .75; }
+
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+
+/* The hero figure is the first thing to give up its column: at this width the
+ * two loop boxes side by side would each be too narrow to read. */
+@media (max-width: 940px) {
+  .hero { grid-template-columns: 1fr; gap: 2.5rem; }
+  .kinds { grid-template-columns: 1fr; }
+  .points { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .contrast { grid-template-columns: 1fr; }
+  .hero { padding-top: 2.2rem; }
+  .runcard { padding: 1.2rem 1.1rem 1rem; }
+  /* Stacked, the horizontal arrows no longer point at anything, so the loop
+     becomes a plain sequence with the relationship carried by the words. */
+  .loop { grid-template-columns: 1fr; gap: .5rem; }
+  .loop-link { flex-direction: row; justify-content: space-between; min-width: 0; }
+  .loop-arrow::before { display: none; }
+  .methodfig { width: calc(100vw - 2rem); }
+}
+
+/* Two columns side by side stop being two columns below this width. Stacking
+ * them loses the left/right direction the layout is built on, so the action
+ * bar has to carry that on its own — hence the arrow and the word, not just
+ * the lit column. */
+@media (max-width: 860px) {
+  .topbar { height: auto; padding: .5rem 1rem; }
+  main { height: auto; }
+  .view-watch { height: auto; display: block; }
+  .split, body[data-hasrun="0"] .split { grid-template-columns: 1fr; }
+  .col { border-top-width: 1px; }
+  .col-body { max-height: 65vh; }
+  /* Stacked, the channel loses its between-ness, so it leads instead: the
+     arrow and the words are the only thing left carrying the direction. */
+  .channel { order: -1; height: auto; max-height: none; padding-bottom: .7rem; }
+  .act-arrow, .channel[data-dir="fetch"] .act-arrow,
+  .channel[data-dir="write"] .act-arrow { text-align: left; }
+  .wires { display: none; }
+  .selector-meta { margin-left: 0; align-items: flex-start; }
+  .selector-meta .caption { text-align: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+@media print {
+  .topbar, .rail-wrap, .runbar, .wires, .footer { display: none; }
+  .view[hidden] { display: block !important; }
+  .split { grid-template-columns: 1fr; }
+  .col-body, .channel, .view, .col { height: auto; max-height: none; overflow: visible; }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "ProReviewer",
+  "subtitle": "From Passive Generation to **Investigation**",
+  "tagline": "A peer-review agent that reviews papers the way experts do — **reading step by step, taking notes, and verifying claims before judging.**",
+  "blurb": "ProReviewer formulates peer review as a **Markov Decision Process**: the paper is an **environment**, and the agent keeps a structured working memory — a **review log** — across many steps. **What is unresolved in that log decides where it reads next**, and every point in the final review is assembled from the entries it settled.",
+  "authors": ["Haishuo Fang", "Yue Feng", "Iryna Gurevych"],
+  "links": [
+    { "label": "read_paper", "url": "https://arxiv.org/abs/2606.13349", "primary": true },
+    { "label": "view_source", "url": "https://github.com/UKPLab/arxiv2026-ProReviewer" },
+    { "label": "dataset", "url": "https://huggingface.co/datasets/UKPLab/ProReviewer-Dataset" }
+  ],
+  "repo": "https://github.com/UKPLab/arxiv2026-ProReviewer",
+  "arxiv": "2606.13349",
+  "license": "Apache-2.0",
+  "bibtex": "@article{fang2026passive,\n  title={From Passive Generation to Investigation: A Proactive Scientific Peer Review Agent},\n  author={Fang, Haishuo and Feng, Yue and Gurevych, Iryna},\n  journal={arXiv preprint arXiv:2606.13349},\n  year={2026}\n}",
+  "install": [
+    {
+      "title": "As a skill",
+      "note": "No GPU. Install into a CLI agent (Claude Code, Codex, Gemini CLI).",
+      "code": "git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git\ncp -R arxiv2026-ProReviewer/ProReviewer-Skill/proreviewer ~/.claude/skills/"
+    },
+    {
+      "title": "Against an API",
+      "note": "No GPU. Run the agent loop against any model with API keys.",
+      "code": "python run_inference.py --model <model> --paper paper.pdf"
+    },
+    {
+      "title": "Trained checkpoint",
+      "note": "GPU required. Inference with the RL-trained model.",
+      "code": "python run_inference.py --model proreviewer-rl --paper paper.pdf"
+    }
+  ]
+}

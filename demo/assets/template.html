@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<meta name="description" content="A recorded peer-review agent run: the evidence behind every review point, and the investigation followed step by step.">
+<style>
+{{CSS}}
+</style>
+<script>
+/* Set the theme before first paint so the page never flashes the wrong one. */
+try {
+  var t = localStorage.getItem("pr-theme");
+  if (t) document.documentElement.setAttribute("data-theme", t);
+} catch (e) { /* file:// can deny storage; the default stands */ }
+</script>
+</head>
+<body data-view="watch" data-step="0" data-focus="" data-playing="0">
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <a class="brand" href="#" data-view-btn="overview">
+    <span class="brand-name" id="brand-name"></span>
+  </a>
+
+  <nav class="views" role="tablist" aria-label="Section">
+    <button type="button" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="true" data-view-btn="overview">overview</button>
+    <button type="button" role="tab" id="tab-watch" aria-controls="view-watch" aria-selected="false" data-view-btn="watch">watch_a_run</button>
+    <a class="nav-out" id="nav-repo" target="_blank" rel="noopener">github ↗</a>
+  </nav>
+
+  <button type="button" class="theme" id="theme-btn" aria-label="Colour theme: auto">◐</button>
+</header>
+
+<main id="main">
+
+  <!-- ─── Overview ────────────────────────────────────────────────── -->
+  <section id="view-overview" class="view view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
+    <header class="hero">
+      <div class="hero-text">
+        <p class="eyebrow" id="hero-affil"></p>
+        <h1 tabindex="-1" id="hero-name"></h1>
+        <p class="hero-sub" id="hero-sub"></p>
+        <p class="hero-tagline" id="hero-tagline"></p>
+        <p class="hero-authors" id="hero-authors"></p>
+        <div class="cta" id="hero-links"></div>
+      </div>
+
+      <!--
+        The loop at a glance. Deliberately the coarsest possible statement of
+        the method — the paper's own figure says all of this properly under
+        "How it works", and this only has to be readable in a second.
+      -->
+      <figure class="loopfig">
+        <div class="loop">
+          <div class="loop-box loop-state">
+            <span class="loop-tag">state</span>
+            <strong>the review log</strong>
+            <ul class="loop-mini">
+              <li><span class="eid">C</span> claims to verify</li>
+              <li><span class="eid">Q</span> questions to answer</li>
+              <li><span class="eid">N</span> notes</li>
+            </ul>
+          </div>
+
+          <div class="loop-link" aria-hidden="true">
+            <span class="loop-arrow to-env">what is unsettled →</span>
+            <span class="loop-arrow to-state">← evidence</span>
+          </div>
+
+          <div class="loop-box loop-env">
+            <span class="loop-tag">environment</span>
+            <strong>the paper</strong>
+            <div class="loop-cov">
+              <i style="flex:12"></i><i class="on" style="flex:9"></i><i style="flex:5"></i><i class="on" style="flex:14"></i><i style="flex:7"></i><i class="on" style="flex:11"></i>
+            </div>
+            <p class="loop-note">read where the log points, not front to back</p>
+          </div>
+        </div>
+
+        <div class="loop-exit" aria-hidden="true">
+          <span class="loop-down">↓</span>
+          <span class="loop-when">only once nothing is left unsettled</span>
+        </div>
+        <div class="loop-box loop-out">
+          <strong>the generated review</strong>
+          <p class="loop-note">every point assembled from the entries that settled it</p>
+        </div>
+
+        <figcaption class="sr-only">
+          Peer review as a loop: the review log holds claims, questions and notes;
+          what is unsettled there decides where the agent reads in the paper; the
+          evidence it finds updates the log; and only when nothing is left
+          unsettled is the review written from the settled entries.
+        </figcaption>
+      </figure>
+    </header>
+
+    <div class="prose">
+      <section class="block">
+        <h2><span class="num" aria-hidden="true">01</span> How it works</h2>
+        <p class="lede" id="idea-blurb"></p>
+
+        <!--
+          The paper's own method figure, inlined as a data URI so the page stays
+          a single file. Sized to the prose column: it is an overview here, and
+          the paper itself is one click away for the small print. Hides itself
+          if the asset is missing rather than showing a broken image.
+        -->
+        <figure class="methodfig" id="methodfig">
+          <div class="figframe">
+            <!-- data-src, not src: an empty src makes the browser re-request the
+                 page itself, so the image is only given a source once there is one. -->
+            <img id="method-img" data-src="{{FIGURE}}"
+                 alt="ProReviewer as a Markov Decision Process. The agent samples an action
+                    from its policy. Environment actions — read, lookup, finish — act on the paper;
+                    log actions — log, update, outline — act on the review log. Executing an environment
+                    action returns paper content, which together with the paper index, the review log and
+                    the context forms the next state. When the agent finishes, the review is scored by a
+                    multi-dimensional reward: syntactic, review completeness, review quality and overall
+                    score. The review log, maintained and updated at every step, holds claims with a
+                    verification status, questions with a resolution status, notes, and the review outline.">
+          </div>
+          <figcaption><strong>Peer review as an MDP.</strong> The paper is the
+            environment; the review log is the state.</figcaption>
+        </figure>
+
+        <div class="points">
+          <article class="point-card">
+            <span class="pc-glyph" aria-hidden="true">⟳</span>
+            <h3>Review as an MDP</h3>
+            <p>The paper is built as an <strong>environment</strong>; the review
+               log is the <strong>state</strong> the agent carries between steps.
+               A review is a trajectory through it, not one pass of
+               generation.</p>
+          </article>
+          <article class="point-card">
+            <span class="pc-glyph" aria-hidden="true">⇄</span>
+            <h3>Two kinds of action</h3>
+            <p><code>read</code>, <code>lookup</code> and <code>finish</code> act
+               on the paper. <code>log</code>, <code>update</code> and
+               <code>outline</code> act on the log. <strong>Every step is one or
+               the other</strong> — which is what the recorded run replays.</p>
+          </article>
+          <article class="point-card">
+            <span class="pc-glyph" aria-hidden="true">◎</span>
+            <h3>The log drives the reading</h3>
+            <p>What is unsettled decides where it looks next, so it <strong>does
+               not read front to back</strong>. Every claim must reach a verdict,
+               every question an answer — or a confirmed absence, itself a
+               finding.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2><span class="num" aria-hidden="true">02</span> Why it is different</h2>
+        <div class="contrast">
+          <div class="contrast-col">
+            <h3 class="bad">Passive generation</h3>
+            <p>Read the paper front to back, then write down your impressions.
+               <strong>Nothing anchors a criticism to anything</strong>; the reader
+               has to take it on trust.</p>
+          </div>
+          <div class="contrast-col">
+            <h3 class="good">Investigation</h3>
+            <p>Extract what the authors claim, write down what you doubt, then
+               go looking. <strong>The open questions decide where you read
+               next</strong>, and the review is assembled from what you settled.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="highlight">
+        <p>Every point in the final review is <strong>assembled from entries the
+           agent settled</strong> — and every one of them links back to the
+           evidence that settled it.</p>
+        <p class="highlight-note">Nothing in the review is asserted without a
+           record of where it came from. The recorded run below lets you click
+           any point and follow it back.</p>
+      </aside>
+
+      <section class="block">
+        <h2><span class="num" aria-hidden="true">03</span> The review log</h2>
+        <p>The agent's working memory is three kinds of entry. <strong>It is the
+           whole mechanism</strong> — everything else follows from keeping it
+           honest.</p>
+        <div class="kinds">
+          <div class="kind">
+            <span class="eid">C</span>
+            <h3>claims</h3>
+            <p>Assertions <em>the authors</em> made. <strong>Each must reach a
+               verdict</strong>: supported, weak, or invalid.</p>
+          </div>
+          <div class="kind">
+            <span class="eid">Q</span>
+            <h3>questions</h3>
+            <p>The agent's own uncertainties. <strong>Each must be answered</strong> —
+               or confirmed genuinely unanswerable, which is itself a finding.
+               An absence is questioned, never asserted.</p>
+          </div>
+          <div class="kind">
+            <span class="eid">N</span>
+            <h3>notes</h3>
+            <p>Its own observations: patterns across tables, things worth
+               tracking as it reads.</p>
+          </div>
+        </div>
+        <div class="chips" id="status-legend"></div>
+        <p class="caption" id="status-caption"></p>
+      </section>
+
+      <section class="block">
+        <div class="runcard">
+          <h2><span class="num" aria-hidden="true">04</span> Watch a run</h2>
+          <p id="run-blurb"></p>
+          <p class="runcard-cta">
+            <button type="button" class="btn btn-primary" data-view-btn="watch">&gt; watch_a_run</button>
+          </p>
+          <p class="caption">
+            The replay is derived from the archived transcript, not re-enacted.
+            <strong>The build refuses to publish a run that does not reproduce
+            the session's own <code>review_log.json</code>.</strong>
+          </p>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2><span class="num" aria-hidden="true">05</span> Get started</h2>
+        <div class="install" id="install-blocks"></div>
+      </section>
+
+      <section class="block">
+        <h2><span class="num" aria-hidden="true">06</span> Citation</h2>
+        <pre class="bibtex" id="bibtex"></pre>
+      </section>
+    </div>
+  </section>
+
+  <!-- ─── Watch a run ─────────────────────────────────────────────── -->
+  <section id="view-watch" class="view view-watch" role="tabpanel" aria-labelledby="tab-watch" tabindex="-1">
+
+    <div class="selectors">
+      <div class="selector">
+        <label for="sel-paper">select_paper</label>
+        <select id="sel-paper"></select>
+      </div>
+      <div class="selector">
+        <label for="sel-model">select_model</label>
+        <select id="sel-model"></select>
+      </div>
+      <div class="selector-meta">
+        <p class="caption" id="run-byline"></p>
+        <dl class="runstats" id="run-stats"></dl>
+      </div>
+    </div>
+
+    <div class="watch-controls">
+      <div class="runhead">
+        <h2 class="section-rule" tabindex="-1" id="run-title"></h2>
+      </div>
+
+      <div class="runbar">
+        <div class="runbar-left">
+          <button type="button" class="btn btn-primary" id="replay-btn">▶ Replay from the start</button>
+          <button type="button" class="btn" id="prev-btn" aria-label="Previous step">◀</button>
+          <span class="stepnum" id="stepnum" aria-hidden="true"></span>
+          <button type="button" class="btn" id="next-btn" aria-label="Next step">▶</button>
+        </div>
+        <div class="runbar-right" id="notable-strip"></div>
+      </div>
+
+      <div class="rail-wrap">
+        <div class="chapters" id="chapters" aria-hidden="true"></div>
+        <div class="rail" id="rail" role="slider" tabindex="0"
+             aria-label="Run step" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0">
+          <ol class="ticks" id="ticks" aria-hidden="true"></ol>
+        </div>
+        <p class="rail-help" id="rail-help">
+          Arrow keys step · <kbd>J</kbd>/<kbd>K</kbd> jump to where the agent changed its mind ·
+          <kbd>Home</kbd>/<kbd>End</kbd>
+        </p>
+      </div>
+    </div>
+
+    <div class="split" id="split">
+      <!--
+        The wire between state and environment, drawn through the channel that
+        sits between them: entries on one side, the passage on the other, and
+        the action in the middle that carried one to the other.
+      -->
+      <svg class="wires" id="wires" aria-hidden="true" focusable="false">
+        <defs>
+          <marker id="wire-head" viewBox="0 0 8 8" refX="7" refY="4"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L8,4 L0,8 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <g id="wire-g"></g>
+      </svg>
+
+      <!-- Left: everything the agent knows. Persistent; the run accumulates here. -->
+      <section class="col col-log" id="col-log" data-active="0" aria-label="The review log">
+        <h3 class="col-h">
+          The review log
+          <span class="col-note" id="log-count"></span>
+        </h3>
+        <div class="statusbar" id="statusbar" aria-hidden="true"></div>
+        <div class="col-body" id="log-pane" aria-live="off">
+          <details class="legend-strip">
+            <summary>What am I looking at?</summary>
+            <p>
+              The agent keeps this log while it reads, and what is unsettled in it decides
+              where it reads next. <span class="eid">C</span> claims are assertions
+              <em>the authors</em> made, which it must verify.
+              <span class="eid">Q</span> questions are its own uncertainties, which it must
+              answer. <span class="eid">N</span> notes are its observations.
+            </p>
+            <div class="chips" id="status-legend-pane"></div>
+            <p class="caption" id="status-caption-pane"></p>
+          </details>
+          <div id="log-body"></div>
+        </div>
+      </section>
+
+      <!--
+        The channel. Physically between the state and the environment because
+        that is what a step *is*: the agent either reaches right into the paper
+        for evidence, or writes back left into the log. The arrow points the way
+        it moved and the column it moved toward lights up.
+      -->
+      <div class="channel" id="actionbar" data-dir="none">
+        <div class="act-arrow" id="act-arrow" aria-hidden="true"></div>
+        <p class="act-dir" id="act-dir"></p>
+        <p class="act-what" id="act-what"></p>
+        <p class="act-for" id="act-for"></p>
+        <div class="acts" id="acts"></div>
+        <div class="say" id="step-say" hidden></div>
+        <pre class="step-err" id="step-err" hidden></pre>
+      </div>
+
+      <!-- Right: what it can go and look at. Fixed; the run only moves through it. -->
+      <section class="col col-src" id="col-src" data-active="0" data-src="paper"
+               aria-label="The paper and the review">
+        <h3 class="col-h">
+          <span class="srctabs" role="tablist" aria-label="Source">
+            <button type="button" role="tab" data-src-btn="paper" aria-selected="true">the paper</button>
+            <button type="button" role="tab" data-src-btn="review" aria-selected="false">the review</button>
+          </span>
+          <span class="col-note" id="src-note"></span>
+        </h3>
+        <div class="cov-bar" id="cov-bar"><span class="cov-now" id="cov-now" hidden></span></div>
+        <div class="col-body" id="paper-pane">
+          <div id="paper-body"></div>
+        </div>
+        <div class="col-body" id="review-pane" hidden>
+          <p class="col-sub" id="review-note"></p>
+          <p class="uncited-note" id="uncited-note"></p>
+          <div id="run-review-body"></div>
+          <div class="score-box" id="score-box" hidden>
+            <h3>Overall score</h3>
+            <p class="score-line" id="score-line"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div id="build-warnings"></div>
+  <p class="fine">
+    <span id="footer-meta"></span> ·
+    generated from recorded sessions by <code>build_demo.py</code>
+  </p>
+</footer>
+
+<div class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
+<script type="application/json" id="pr-data">{{DATA}}</script>
+<script>
+{{JS}}
+</script>
+</body>
+</html>
