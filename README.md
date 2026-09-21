@@ -1,12 +1,18 @@
 # ProReviewer: From Passive Generation to Investigation
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.13349-b31b1b.svg)](https://arxiv.org/abs/2606.13349)
+[![Project page](https://img.shields.io/badge/Project%20page-watch%20a%20run-1f5fa8)](https://ukplab.github.io/arxiv2026-ProReviewer/)
 [![Skill](https://img.shields.io/badge/Skill-ProReviewer-blue)](ProReviewer-Skill/)
 [![License](https://img.shields.io/github/license/UKPLab/ukp-project-template)](https://opensource.org/licenses/Apache-2.0)
 
 **An AI agent that reviews papers the way human experts do — reading step by step, taking notes, and verifying claims before judging.**
 
 **ProReviewer** formulates peer review as a Markov Decision Process (MDP): the paper is built as an environment, and the agent uses a structured working memory (review log) to track its reviewing artifacts across multiple steps.
+
+📺 **[Watch a recorded run →](https://ukplab.github.io/arxiv2026-ProReviewer/)** — the project
+page replays real reviews step by step: what the log still owed an answer, where that sent the
+agent in the paper, what it wrote back, and the review assembled from what it settled. Five
+papers, every step clickable, every review point traceable to the log entries behind it.
 
 ---
 
@@ -201,6 +207,7 @@ ProReviewer/
 ├── run_inference.py              # Inference entry point (API or local model)
 ├── evaluation.py                 # Evaluation entry point
 ├── train.py                      # RL training entry point
+├── build_demo.py                 # Project page entry point
 ├── config.toml.example           # API key configuration template
 │
 ├── ProReviewer-Skill/            # Standalone skill for CLI agents
@@ -214,8 +221,33 @@ ProReviewer/
 │
 ├── rllm/                         # RL framework (modified rLLM)
 │
+├── demo/                         # Project page builder (stdlib only)
+│   ├── replay.py                 # Transcript -> verified step-by-step replay
+│   ├── crossref.py               # Log citations -> lines in the paper
+│   ├── assets/                   # template.html, demo.css, demo.js
+│   └── build_all.sh              # Rebuild the page from every session
+│
+├── docs/index.html               # The published page (GitHub Pages)
+│
 └── utils/                        # LLM API wrapper, token tracking, data pipeline
 ```
+
+---
+
+## The Project Page
+
+The [project page](https://ukplab.github.io/arxiv2026-ProReviewer/) is a single
+self-contained HTML file built from recorded review sessions:
+
+```bash
+./demo/build_all.sh              # writes docs/index.html
+```
+
+Sessions are listed explicitly in `build_all.sh` rather than discovered, so
+publishing a review is always a deliberate act. The build replays each archived
+transcript and refuses to publish a session that does not reproduce its own
+`review_log.json`. See [`demo/README.md`](demo/README.md) for the session
+directory format, the page's structure, and the rest of its guarantees.
 
 ---
 
