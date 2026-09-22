@@ -21,13 +21,13 @@
     },
     {
       "title": "Against an API",
-      "note": "No GPU. Run the agent loop against any model with API keys.",
-      "code": "python run_inference.py --model <model> --paper paper.pdf"
+      "note": "No GPU. Runs the agent loop against any model via litellm. Needs the repo and the full install.",
+      "code": "git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git\ncd arxiv2026-ProReviewer    # then README → Installation\ncp config.toml.example config.toml    # add your API keys\npython run_inference.py --model \"anthropic/claude-opus-4\" \\\n    --test_data data/test_data --output_dir outputs/reviews"
     },
     {
       "title": "Trained checkpoint",
-      "note": "GPU required. Inference with the RL-trained model.",
-      "code": "python run_inference.py --model proreviewer-rl --paper paper.pdf"
+      "note": "GPU required. Needs the repo and the full install, including CUDA and the verl/rLLM backends.",
+      "code": "git clone https://github.com/UKPLab/arxiv2026-ProReviewer.git\ncd arxiv2026-ProReviewer    # then README → Installation\npython run_inference.py --model <path-to-checkpoint> \\\n    --test_data data/test_data --output_dir outputs/reviews --n_runs 4"
     }
   ]
 }

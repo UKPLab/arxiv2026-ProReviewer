@@ -24,6 +24,8 @@ from reviewer_memory import ReviewLog, CONFERENCE_SCALES, DEFAULT_CONFERENCE, fo
 STATE_FILE = "review_log.json"
 PAPER_FILE = "paper.md"
 REVIEW_FILE = "review.md"
+STEPS_FILE = "steps.jsonl"
+STEPS_MD = "steps.md"
 
 
 def get_output_dir(args) -> str:
@@ -88,6 +90,13 @@ def split_list(value: str) -> list:
     if not value:
         return []
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def split_ops(value: str) -> list:
+    """Split semicolon-separated ops, so a single op may contain commas ('resolve_question Q6,Q7')."""
+    if not value:
+        return []
+    return [v.strip() for v in value.split(";") if v.strip()]
 
 
 def convert_pdf_to_text(pdf_path: str) -> str:
@@ -575,6 +584,72 @@ def cmd_export(args):
     print(f"Review exported → {out_path}")
 
 
+def cmd_step(args):
+    """Append one investigation step to the trajectory record."""
+    output_dir = get_output_dir(args)
+    path = os.path.join(output_dir, STEPS_FILE)
+
+    n = 0
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            n = sum(1 for line in f if line.strip())
+
+    rec = {
+        "step": n + 1,
+        "target": args.target,
+        "why": args.why,
+        "action": args.action,
+        "found": args.found,
+        "ops": split_ops(args.ops),
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    print(f"Step {rec['step']} recorded → {path}")
+
+
+def render_steps(output_dir: str) -> str | None:
+    """Render steps.jsonl as markdown. Returns the path, or None if no steps exist."""
+    path = os.path.join(output_dir, STEPS_FILE)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        steps = [json.loads(line) for line in f if line.strip()]
+    if not steps:
+        return None
+
+    parts = [
+        "# Investigation steps",
+        "",
+        "Each step records which log entries it targeted, why they were picked at that moment, "
+        "what was read or computed, and the log operations that resulted. The reading order is "
+        "driven by the log — unsettled claims and open questions decide where to read next.",
+        "",
+        f"**{len(steps)} steps.**",
+        "",
+        "---",
+        "",
+    ]
+    for s in steps:
+        parts += [
+            f"## Step {s['step']} — {s['target']}",
+            "",
+            f"**Why now.** {s['why']}",
+            "",
+            f"**Action.** {s['action']}",
+            "",
+            f"**Found.** {s['found']}",
+            "",
+        ]
+        if s.get("ops"):
+            parts += ["**Log operations.**", ""] + [f"- `{o}`" for o in s["ops"]] + [""]
+        parts += ["---", ""]
+
+    out_path = os.path.join(output_dir, STEPS_MD)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(parts))
+    return out_path
+
+
 def cmd_finalize(args):
     """Export review.md, print the review content, and show the output folder."""
     output_dir = get_output_dir(args)
@@ -589,12 +664,17 @@ def cmd_finalize(args):
     # Print the review content
     print(review_text)
 
+    # Render the trajectory, if any steps were recorded
+    steps_path = render_steps(output_dir)
+
     # Print output folder summary
     print("---")
     print(f"Output folder: {output_dir}")
     print(f"  {PAPER_FILE}         — converted paper")
     print(f"  {STATE_FILE}   — investigation log (claims, questions, notes)")
     print(f"  {REVIEW_FILE}        — final review")
+    if steps_path:
+        print(f"  {STEPS_MD}        — investigation steps (rendered from {STEPS_FILE})")
 
 
 def main():
@@ -660,6 +740,14 @@ def main():
     p.add_argument("conference", choices=list(CONFERENCE_SCALES.keys()),
                     help="Conference rating scale to use")
 
+    # step
+    p = sub.add_parser("step", help="Record one investigation step in the trajectory")
+    p.add_argument("--target", required=True, help="Which log entries / what is being investigated")
+    p.add_argument("--why", required=True, help="Why this target was picked now")
+    p.add_argument("--action", required=True, help="What was read, searched, or computed")
+    p.add_argument("--found", required=True, help="Evidence found")
+    p.add_argument("--ops", help="Semicolon-separated log operations produced (e.g. 'add_claim C1; update_claim C2=weak')")
+
     # show
     p = sub.add_parser("show", help="Print current log state")
     p.add_argument("--detailed", action="store_true", help="Show full details")
@@ -686,6 +774,7 @@ def main():
         "resolve_question": cmd_resolve_question,
         "outline": cmd_outline,
         "set_conference": cmd_set_conference,
+        "step": cmd_step,
         "show": cmd_show,
         "export": cmd_export,
         "finalize": cmd_finalize,

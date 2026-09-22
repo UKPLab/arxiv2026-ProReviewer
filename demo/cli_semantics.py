@@ -31,8 +31,12 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # Checked against the live skill files; a mismatch means the port may be stale.
+# review_cli.py moved to cc2e4d19 when the `step` subcommand was added. `step`
+# writes steps.jsonl and never touches review_log.json, so no log semantics
+# ported here changed — and `step` is deliberately absent from
+# shellparse.SUBCOMMANDS so the replay does not treat it as a mutation.
 PORTED_FROM_SHA256 = {
-    "review_cli.py": "901fb1e1",
+    "review_cli.py": "cc2e4d19",
     "reviewer_memory.py": "d163d2c1",
 }
 

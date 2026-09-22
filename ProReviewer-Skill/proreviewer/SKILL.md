@@ -39,16 +39,18 @@ Use `${CLAUDE_SKILL_DIR}/review_cli.py` to maintain a persistent ReviewLog. The 
    2. **Pick a target** — choose the highest-priority unsettled entry and decide where its evidence should live (e.g., "C2 claims a 3x speedup → check the results table in §4", "Q1 asks about baselines → Grep for baseline names"). State which entry you are investigating before reading. **If the log is empty** (first iteration), the target is the paper's central claims: read the abstract, introduction, and contribution statements, then log them — claims stay `to_be_verified` and questions stay `open`, since you have not seen the evidence yet.
    3. **Gather evidence** — Read the targeted section/table/appendix, or Grep `<output_dir>/paper.md` for specific terms. Prefer targeted jumps over sequential reading; read a new section in full only when it is itself the target.
    4. **Update the log** — resolve or update the targeted entries with the evidence found (`update_claim`, `resolve_question`), citing sections in `--cross_refs`/`--sections`.
-   5. **Log new discoveries** — earlier entries are a starting point, not the full agenda. Every chunk you read is also *new material*: it contains its own author claims (method design choices, ablation conclusions, reward/loss definitions) and raises its own suspicions. Log these as new entries even though you came for something else — deep-paper issues (e.g., a flawed reward design in a method section, a mismatch between an ablation table and its narrative) are usually invisible from the abstract and only enter the log this way.
+   5. **Record the step** — close the iteration with one `step` call (see "Operating the log" below): what you targeted, why you picked it now, what you read or computed, and what you found. This is the trajectory. `review_log.json` stores conclusions but not the reading order or the reasoning that produced it, so this is the only place that survives. Write it after doing the work, not before — `--found` should report what you actually saw.
+   6. **Log new discoveries** — earlier entries are a starting point, not the full agenda. Every chunk you read is also *new material*: it contains its own author claims (method design choices, ablation conclusions, reward/loss definitions) and raises its own suspicions. Log these as new entries even though you came for something else — deep-paper issues (e.g., a flawed reward design in a method section, a mismatch between an ablation table and its narrative) are usually invisible from the abstract and only enter the log this way.
 3. **Exit condition** — the loop ends only when every claim has a final status (`supported`/`weak`/`invalid`) and every question is `resolved` or confirmed unanswerable (a genuine absence, which maps to a weakness). Run `show` to verify. If any section of the paper was never visited, check it before exiting — it may contain evidence that overturns earlier statuses.
 4. **Finalize** — build the outline from the settled entries and finalize. This exports `review.md`, prints the review content, and shows the output folder path.
    ```bash
    python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> finalize
    ```
-   The output folder contains three artifacts:
+   The output folder contains:
    - `paper.md` — converted paper
    - `review_log.json` — investigation log (claims, questions, notes)
    - `review.md` — final review; each point carries clickable evidence links (e.g. `[C3]`) that jump to an Evidence appendix expanding the underlying log records. Pass `--no-evidence` to `finalize`/`export` for a plain review without links.
+   - `steps.jsonl` / `steps.md` — the investigation as a sequence of steps, written only if `step` was used. `finalize` renders the markdown from the JSONL automatically.
 
 ## The ReviewLog
 
@@ -115,9 +117,23 @@ python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> resolve_question --i
 
 Every claim must reach a final status. If a question has no answer, keep it open — that absence maps to a weakness. Cross-reference as you read: when new evidence relates to an earlier entry, update it.
 
+**Cite sections with `§`, not `S`.** Write `--section "§4.1"`, `"§A.3"`, `"§Abstract"` — downstream tooling resolves `§N` against the paper's headings to build clickable links, and an `S4.1` spelling silently resolves to nothing. `Table 4` and `Fig 3` are matched by name and need no prefix.
+
+**3. Step** — record one investigation step. Run the `step` subcommand once per loop iteration, after the reading and the log updates, with five flags:
+
+| Flag | Contents |
+|---|---|
+| `--target` | Which log entries this iteration is investigating (e.g. `"C2, Q1"`) |
+| `--why` | Why that target was picked at this moment |
+| `--action` | What was read, grepped, or computed — cite line ranges and table numbers |
+| `--found` | The evidence actually seen |
+| `--ops` | Optional, **semicolon-separated** list of the log operations produced |
+
+`--ops` uses semicolons so that a single op may itself contain commas. Steps are auto-numbered and appended to `steps.jsonl`; `finalize` renders `steps.md` from them. Omitting `step` entirely is fine — no trajectory files are produced and nothing else changes.
+
 **Investigation discipline:** logging and resolving are separate acts. An entry is added when something *needs* checking and updated when evidence is *found* — normally in a later iteration, after a targeted read of a different part of the paper (a claim in §1 is verified against the tables in §4, not against §1 itself). Only add-and-resolve in the same step when the current chunk genuinely contains the evidence. If you find yourself resolving every entry immediately after adding it, you are documenting impressions, not investigating.
 
-**3. Outline** — build the review from resolved entries. Add **one point per call**, and cite evidence only via the `--claims`/`--questions`/`--notes` args. Never write tag IDs (C1, Q2, N3...) inside `--content` — at finalize they are rendered automatically as clickable links after each point. Do incorporate the *substance* of the tagged records (numbers, sections, findings) into the content text.
+**4. Outline** — build the review from resolved entries. Add **one point per call**, and cite evidence only via the `--claims`/`--questions`/`--notes` args. Never write tag IDs (C1, Q2, N3...) inside `--content` — at finalize they are rendered automatically as clickable links after each point. Do incorporate the *substance* of the tagged records (numbers, sections, findings) into the content text.
 
 ```bash
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section strengths --content "Well-motivated contribution..." --claims "C1" --notes "N1"
@@ -128,20 +144,20 @@ python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> outline --section ov
 
 The overall score is validated against the conference scale set at init. Invalid scores are rejected with an error showing the valid values.
 
-**4. Change conference** — switch the rating scale after init (clears the score if it's invalid for the new scale).
+**5. Change conference** — switch the rating scale after init (clears the score if it's invalid for the new scale).
 
 ```bash
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> set_conference neurips
 ```
 
-**5. View** — check log state at any time.
+**6. View** — check log state at any time.
 
 ```bash
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> show            # brief: status counts + recent entries
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> show --detailed  # full: all entries with reasoning + outline
 ```
 
-**6. Finalize** — export and print the final review.
+**7. Finalize** — export and print the final review.
 
 ```bash
 python ${CLAUDE_SKILL_DIR}/review_cli.py --dir <output_dir> finalize    # exports review.md, prints review + output folder
