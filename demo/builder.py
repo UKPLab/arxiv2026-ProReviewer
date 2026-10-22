@@ -24,6 +24,7 @@ from . import crossref
 from .payload import build_session_payload
 from .replay import (
     build_steps,
+    mark_superseded_reads,
     verify_confirmations,
     verify_final_state,
     verify_paper_identity,
@@ -158,6 +159,7 @@ def _build_one(path: str, scales: Dict[str, Any], on_replay_mismatch: str) -> Op
         if steps:
             warnings += verify_review_md(snapshot, session.review_md, scales)
             if session.has_paper:
+                mark_superseded_reads(steps, session.paper_lines)
                 warnings += verify_paper_identity(steps, session.paper_lines)
 
     review_md = session.review_md or cli.format_review(session.log, scales)

@@ -568,6 +568,14 @@
       from = step.src;
     }
 
+    if (read && read.superseded) {
+      markRange(built, null);
+      $("src-note").textContent = "read an earlier " + read.total +
+        "-line paper.md, replaced later in the run";
+      setCoverageNow(null);
+      return;
+    }
+
     if (!read) {
       markRange(built, null);
       $("src-note").textContent = step && (step.points || step.outline)
@@ -612,7 +620,7 @@
       read = session.steps[step.src].read;
       from = step.src;
     }
-    if (!read) return;
+    if (!read || read.superseded) return;
 
     var dir = step.read ? "fetch" : "write";
     var end = read.start + Math.max(read.lines, 1) - 1;
@@ -1211,11 +1219,6 @@
     var repo = PROJECT.repo || "";
     var navRepo = $("nav-repo");
     if (repo) navRepo.href = repo; else navRepo.hidden = true;
-    // Joined rather than concatenated, so an absent field does not leave a
-    // dangling separator behind it.
-    $("footer-meta").textContent = [PROJECT.license, PROJECT.affiliation]
-      .filter(Boolean).join(" · ");
-
     var links = $("hero-links");
     links.textContent = "";
     (PROJECT.links || []).forEach(function (link) {

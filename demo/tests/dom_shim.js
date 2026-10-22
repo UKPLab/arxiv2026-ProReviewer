@@ -676,7 +676,6 @@ if (report[0] === 'BOOT OK') {
   report.push('bibtex        : ' + (DOC.getElementById('bibtex').textContent.indexOf('@article') === 0
               ? 'present' : 'MISSING'));
   report.push('github nav    : ' + DOC.getElementById('nav-repo').getAttribute('href'));
-  report.push('footer        : ' + DOC.getElementById('footer-meta').textContent);
   report.push('run blurb     : ' + DOC.getElementById('run-blurb').textContent.slice(0, 80) + '…');
   var invented = DOC.querySelectorAll('a').map(function (a) { return a.getAttribute('href') || ''; })
     .filter(function (h) { return /^https?:/.test(h); })

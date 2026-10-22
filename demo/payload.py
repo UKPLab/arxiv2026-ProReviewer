@@ -255,7 +255,7 @@ def build_paper(session: Session, steps: List[Step]) -> Optional[Dict[str, Any]]
     spans: List[Tuple[int, int]] = []
     for step in steps:
         read = step.read
-        if read and read["file"] == "paper.md" and read["lines"]:
+        if read and read["file"] == "paper.md" and read["lines"] and not read.get("superseded"):
             spans.append((read["start"], read["start"] + read["lines"] - 1))
 
     merged: List[List[int]] = []
@@ -506,7 +506,7 @@ def build_steps_payload(steps: List[Step], paper: Optional[Dict[str, Any]]) -> L
         if step.read:
             read = dict(step.read)
             read.pop("text", None)
-            if headings and read["file"] == "paper.md":
+            if headings and read["file"] == "paper.md" and not read.get("superseded"):
                 title = heading_for_line(headings, read["start"])
                 if title:
                     read["heading"] = title

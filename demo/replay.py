@@ -456,12 +456,35 @@ def verify_review_md(snapshot: LogSnapshot, review_md: Optional[str],
     ]
 
 
+def mark_superseded_reads(steps: List[Step], paper_lines: List[str]) -> None:
+    """Flag paper.md reads of a version the run itself later replaced.
+
+    A session may rebuild paper.md mid-run (e.g. the source was truncated and
+    the full text was re-fetched). Reads made before that show a different
+    file, so their line numbers must not be mapped onto the shipped paper. A
+    read counts as superseded only when its length differs from the file on
+    disk and some later read saw the on-disk length.
+    """
+    total = len(paper_lines)
+    matched_later = False
+    for step in reversed(steps):
+        read = step.read
+        if not read or read["file"] != "paper.md" or not read["total"]:
+            continue
+        if read["total"] == total:
+            matched_later = True
+        elif matched_later:
+            read["superseded"] = True
+
+
 def verify_paper_identity(steps: List[Step], paper_lines: List[str]) -> List[str]:
     """Warn-level: archived Read excerpts should match the shipped paper.md."""
     problems: List[str] = []
     for step in steps:
         read = step.read
         if not read or not read.get("text") or read["file"] != "paper.md":
+            continue
+        if read.get("superseded"):
             continue
         if read["total"] and read["total"] != len(paper_lines):
             problems.append(
