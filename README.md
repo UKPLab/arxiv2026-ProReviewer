@@ -1,4 +1,4 @@
-# ProReviewer: From Passive Generation to Investigation
+# ProReviewer: Evidence-Driven Investigation for Scientific Peer Review
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.13349-b31b1b.svg)](https://arxiv.org/abs/2606.13349)
 [![Project page](https://img.shields.io/badge/Project%20page-watch%20a%20run-1f5fa8)](https://ukplab.github.io/arxiv2026-ProReviewer/)
@@ -254,8 +254,8 @@ directory format, the page's structure, and the rest of its guarantees.
 ## Citation
 
 ```bibtex
-@article{fang2026passive,
-  title={From Passive Generation to Investigation: A Proactive Scientific Peer Review Agent},
+@article{fang2026evidence,
+  title={Evidence-Driven Investigation for Scientific Peer Review},
   author={Fang, Haishuo and Feng, Yue and Gurevych, Iryna},
   journal={arXiv preprint arXiv:2606.13349},
   year={2026}
