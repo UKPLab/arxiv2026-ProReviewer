@@ -12,7 +12,7 @@
   "repo": "https://github.com/UKPLab/arxiv2026-ProReviewer",
   "arxiv": "2606.13349",
   "license": "Apache-2.0",
-  "bibtex": "@article{fang2026evidence,\n  title={Evidence-Driven Investigation for Scientific Peer Review},\n  author={Fang, Haishuo and Feng, Yue and Gurevych, Iryna},\n  journal={arXiv preprint arXiv:2606.13349},\n  year={2026}\n}",
+  "bibtex": "@article{fang2026evidence,\n  title={ProReviewer: Evidence-Driven Investigation for Scientific Peer Review},\n  author={Fang, Haishuo and Feng, Yue and Gurevych, Iryna},\n  journal={arXiv preprint arXiv:2606.13349},\n  year={2026}\n}",
   "install": [
     {
       "title": "As a skill",

@@ -255,7 +255,7 @@ directory format, the page's structure, and the rest of its guarantees.
 
 ```bibtex
 @article{fang2026evidence,
-  title={Evidence-Driven Investigation for Scientific Peer Review},
+  title={ProReviewer: Evidence-Driven Investigation for Scientific Peer Review},
   author={Fang, Haishuo and Feng, Yue and Gurevych, Iryna},
   journal={arXiv preprint arXiv:2606.13349},
   year={2026}
