@@ -645,7 +645,6 @@ if (report[0] === 'BOOT OK') {
     .map(function (b) { return b.textContent; }).join(' -> '));
   report.push('figure lives in : ' + (DOC.querySelector('.prose .methodfig')
     ? 'the How it works section' : 'NOT in the prose'));
-  report.push('figure caption: "' + DOC.querySelector('.methodfig figcaption').textContent.trim() + '"');
   // Two paths to emphasis: literal <strong> in the template, and **markers**
   // in project.json run through inlineMd. Check both — innerHTML is not parsed
   // into elements here, so the generated one is inspected as markup.

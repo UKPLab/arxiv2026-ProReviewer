@@ -348,14 +348,6 @@ kbd {
      shrinking the figure into an unreadable postage stamp. */
   min-width: 480px;
 }
-/* One line. A caption that wraps reads as a paragraph and competes with the
- * figure, so it is short enough and unconstrained enough to stay single. */
-.methodfig figcaption {
-  font-size: .76rem; color: var(--fg-faint); margin-top: .6rem;
-  line-height: 1.4;
-}
-.methodfig figcaption strong { color: var(--fg-muted); font-weight: 600; }
-
 .points { margin-top: 2rem; }
 
 /* ── Method highlights ────────────────────────────────────────────── */

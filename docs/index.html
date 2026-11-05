@@ -356,14 +356,6 @@ kbd {
      shrinking the figure into an unreadable postage stamp. */
   min-width: 480px;
 }
-/* One line. A caption that wraps reads as a paragraph and competes with the
- * figure, so it is short enough and unconstrained enough to stay single. */
-.methodfig figcaption {
-  font-size: .76rem; color: var(--fg-faint); margin-top: .6rem;
-  line-height: 1.4;
-}
-.methodfig figcaption strong { color: var(--fg-muted); font-weight: 600; }
-
 .points { margin-top: 2rem; }
 
 /* ── Method highlights ────────────────────────────────────────────── */
@@ -1436,34 +1428,31 @@ try {
                     score. The review log, maintained and updated at every step, holds claims with a
                     verification status, questions with a resolution status, notes, and the review outline.">
           </div>
-          <figcaption><strong>Peer review as an MDP.</strong> The paper is the
-            environment; the review log is the state.</figcaption>
         </figure>
 
         <div class="points">
           <article class="point-card">
-            <span class="pc-glyph" aria-hidden="true">⟳</span>
-            <h3>Review as an MDP</h3>
-            <p>The paper is built as an <strong>environment</strong>; the review
-               log is the <strong>state</strong> the agent carries between steps.
-               A review is a trajectory through it, not one pass of
-               generation.</p>
+            <span class="pc-glyph" aria-hidden="true">?</span>
+            <h3>Doubts before evidence</h3>
+            <p>The agent first writes down what the authors claim and what it
+               doubts. <strong>Every entry is something still to settle</strong>
+               — the log is an agenda, not a summary.</p>
           </article>
           <article class="point-card">
             <span class="pc-glyph" aria-hidden="true">⇄</span>
-            <h3>Two kinds of action</h3>
-            <p><code>read</code>, <code>lookup</code> and <code>finish</code> act
-               on the paper. <code>log</code>, <code>update</code> and
-               <code>outline</code> act on the log. <strong>Every step is one or
-               the other</strong> — which is what the recorded run replays.</p>
+            <h3>Evidence settles each entry</h3>
+            <p><code>read</code> and <code>lookup</code> fetch a passage;
+               <code>log</code> and <code>update</code> record what it shows.
+               <strong>A verdict is written down with the passage that
+               settled it.</strong></p>
           </article>
           <article class="point-card">
             <span class="pc-glyph" aria-hidden="true">◎</span>
-            <h3>The log drives the reading</h3>
+            <h3>The open entries drive the reading</h3>
             <p>What is unsettled decides where it looks next, so it <strong>does
-               not read front to back</strong>. Every claim must reach a verdict,
-               every question an answer — or a confirmed absence, itself a
-               finding.</p>
+               not read front to back</strong>. Only once nothing is open do
+               <code>outline</code> and <code>finish</code> turn the log into a
+               review.</p>
           </article>
         </div>
       </section>
